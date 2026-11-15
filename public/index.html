@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TeleAgent 多账号保活</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot" id="dot"></span>
+      <h1>TeleAgent 多账号保活</h1>
+      <span class="badge" id="sumBadge">加载中…</span>
+    </div>
+    <div class="pills" id="pills"></div>
+    <div class="row nowrap">
+      <button class="btn primary" id="btnAdd">+ 新增账号</button>
+      <button class="btn" id="btnNotify">通知设置</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="card side">
+      <div class="side-head">
+        <h2>账号列表</h2>
+        <span class="hint" id="accCount"></span>
+      </div>
+      <div id="accList" class="acc-list"></div>
+      <p class="hint">每个账号独立循环、独立登录态，互不影响。</p>
+    </aside>
+
+    <section class="main-col">
+      <div class="card" id="detailCard">
+        <div class="card-head">
+          <div class="dt-head">
+            <h2 id="dName">未选择账号</h2>
+            <span class="badge" id="dPhase">-</span>
+          </div>
+          <button class="toggle sm" id="btnEnabled">启用保活</button>
+        </div>
+
+        <div class="dt-stats" id="dStats"></div>
+
+        <div class="pane" id="detailBody">
+          <h3>登录方式</h3>
+          <div class="seg">
+            <button class="seg-btn" data-auth="cookie">Cookie 登录</button>
+            <button class="seg-btn" data-auth="password">账号密码（自动续期）</button>
+          </div>
+
+          <div id="paneCookie" class="pane">
+            <label>Cookie（整条粘贴，多账号可各用各的）</label>
+            <textarea id="cookie" rows="3" placeholder="operationToken=...; x-token=..."></textarea>
+            <button class="btn" id="saveCookie">保存 Cookie</button>
+          </div>
+
+          <div id="panePassword" class="pane hidden">
+            <div class="grid2">
+              <label>账号<input id="account" placeholder="账号名" /></label>
+              <label>密码（留空表示不修改）<input id="password" type="password" placeholder="仅保存加密后的密文" /></label>
+            </div>
+            <div class="row">
+              <label class="check"><input type="checkbox" id="autoRelogin" /> 到期前自动重新登录</label>
+              <label class="inline">提前 <input id="reloginDays" type="number" min="1" max="28" class="num" /> 天</label>
+            </div>
+            <button class="btn primary" id="doLogin">登录并保存</button>
+            <p class="hint" id="loginHint"></p>
+          </div>
+
+          <h3 class="mt">保活设置</h3>
+          <div class="grid2">
+            <label>模式
+              <select id="mode">
+                <option value="ticket">ticket（只换票，推荐）</option>
+                <option value="claim">claim（建会话，保活最稳）</option>
+              </select>
+            </label>
+            <label>换票间隔（秒）<input id="refreshSec" type="number" min="60" /></label>
+            <label>实例 ID<input id="instanceId" placeholder="留空自动取第一个" /></label>
+            <label>让位分钟<input id="pauseMin" type="number" min="1" /></label>
+            <label>显示名<input id="name" placeholder="例如：会员号A / 公司号" /></label>
+            <label>该账号单独机器人（可留空）<input id="wecomWebhook" placeholder="留空则用全局通知配置" /></label>
+          </div>
+          <div class="row">
+            <button class="btn primary" id="saveKeep">保存设置</button>
+            <button class="btn" id="restart">重载循环</button>
+            <button class="btn" id="desktop">打开云电脑</button>
+            <button class="btn danger" id="delAccount">删除账号</button>
+          </div>
+          <p class="hint" id="detailHint"></p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>运行日志</h2>
+          <div class="row nowrap">
+            <select id="logAccount"><option value="">全部账号</option></select>
+            <select id="logFilter">
+              <option value="all">全部级别</option>
+              <option value="info">info</option>
+              <option value="success">success</option>
+              <option value="warning">warning</option>
+              <option value="error">error</option>
+            </select>
+            <select id="logLimit">
+              <option value="100">100 条</option>
+              <option value="200" selected>200 条</option>
+              <option value="500">500 条</option>
+            </select>
+            <label class="check"><input type="checkbox" id="autoScroll" checked /> 跟随</label>
+          </div>
+        </div>
+        <pre id="logs" class="logs"></pre>
+      </div>
+    </section>
+  </main>
+
+  <!-- 新增账号 -->
+  <div class="modal hidden" id="modalAdd">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>新增账号</h2>
+        <button class="x" data-close="modalAdd">×</button>
+      </div>
+      <label>显示名<input id="addName" placeholder="例如：会员号A" /></label>
+      <div class="grid2">
+        <label>账号<input id="addAccount" placeholder="登录账号（可留空，用 Cookie）" /></label>
+        <label>密码<input id="addPassword" type="password" placeholder="账号密码" /></label>
+      </div>
+      <label>或者直接贴 Cookie<textarea id="addCookie" rows="3" placeholder="operationToken=..."></textarea></label>
+      <div class="row">
+        <button class="btn primary" id="addSubmit">创建</button>
+        <button class="btn" data-close="modalAdd">取消</button>
+      </div>
+      <p class="hint">填账号密码会立刻尝试登录一次（含滑块校验）；只贴 Cookie 则直接可用。</p>
+    </div>
+  </div>
+
+  <!-- 通知设置 -->
+  <div class="modal hidden" id="modalNotify">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>全局通知设置</h2>
+        <button class="x" data-close="modalNotify">×</button>
+      </div>
+      <label class="check"><input type="checkbox" id="notifyEnabled" /> 开启推送</label>
+      <label>企业微信机器人 Webhook<input id="gWecomWebhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." /></label>
+      <div class="grid2">
+        <label>同类提醒冷却（分钟）<input id="cooldownMin" type="number" min="1" /></label>
+        <label class="check" style="align-self:end"><input type="checkbox" id="notifyRecover" /> 恢复也提醒</label>
+      </div>
+      <div class="row">
+        <button class="btn primary" id="saveNotify">保存</button>
+        <button class="btn" id="testNotify">发测试消息</button>
+        <button class="btn" data-close="modalNotify">关闭</button>
+      </div>
+      <p class="hint">会推送：账号掉线、云电脑掉线/自动拉起、登录态快过期。推送标题带账号名。</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
