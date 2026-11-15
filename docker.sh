@@ -26,6 +26,7 @@ PASSWORD=""
 WEBUSER="admin"
 INSTALL_DOCKER=1
 USE_COMPOSE=1
+VERSION="2026-11-15-v4"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -40,8 +41,6 @@ while [ $# -gt 0 ]; do
 done
 
 printf '\033[1;36mTeleAgent 多账号 · Docker 部署脚本 %s\033[0m\n' "$VERSION"
-
-VERSION="2026-11-14-v3"
 
 say() { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 ok()  { printf '\033[1;32m[ok]\033[0m %s\n' "$*"; }
