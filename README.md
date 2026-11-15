@@ -207,10 +207,43 @@ compose 那份 `docker-compose.yml` 多做了两件事，用 `docker run` 时要
 | POST | `/api/accounts/<id>/login` | 手动登录（不传密码则用已存密文） |
 | POST | `/api/accounts/<id>/restart` | 重载该账号的保活循环 |
 | POST | `/api/accounts/<id>/checkin` | 签到 |
+| POST | `/api/accounts/<id>/points` | 刷新剩余积分 + 每日领取状态 |
+| POST | `/api/accounts/<id>/points-claim` | 立即领取每日积分 |
 | POST | `/api/accounts/<id>/desktop-url` | 生成网页版云电脑入口（claim 模式会让位） |
 | POST | `/api/accounts/<id>/delete` | 删除账号 |
 | POST | `/api/notify` | 全局通知配置 |
 | POST | `/api/notify/test` | 发测试消息（可带 `account` 指定用哪个机器人） |
+
+## 积分：自动领取 + 剩余显示
+
+每个账号都能自动领「积分福利社」的每日积分（默认 100 分/天），并在面板上显示余额。
+
+**面板在哪看**
+
+- 左侧账号卡片：`积分 6300`
+- 右侧详情统计条：`剩余积分` / `今日领取`（已领 / 未领）
+- 「积分福利社」一栏：勾选「每天自动领取每日积分」后点 `保存设置`；`立即领取` 手动补领，`刷新积分` 只拉余额不动账
+- 小字提示：每日可领多少、本期已领几天累计多少分、上次领取时间、积分最早到期还有几天
+
+**自动领取的时机**
+
+保活循环每轮成功换票后检查一次：
+
+- 余额超过 10 分钟没刷新 → 拉一次 `points/detail`
+- 今天还没领且距上次尝试超过 20 分钟 → 调 `checkTask?type=daily_login` 领取，成功后推送一条通知
+
+领取前会先读 `checkDayTask`，`claimed_today=true` 就直接跳过，不会重复打接口。积分接口用的是 `/meter/super-agent`，与实例管理接口不同源，但共用同一个 Cookie；Cookie 失效时积分接口报 401，会和保活一起触发自动重登。
+
+**对应接口**
+
+```bash
+# 余额
+curl -H "Cookie: $COOKIE" https://agent.teleai.com.cn/meter/super-agent/user/portal/points/detail
+# 今日领取状态
+curl -H "Cookie: $COOKIE" https://agent.teleai.com.cn/meter/super-agent/user/portal/companyStore/checkDayTask
+# 领取
+curl -H "Cookie: $COOKIE" "https://agent.teleai.com.cn/meter/super-agent/user/portal/companyStore/checkTask?type=daily_login"
+```
 
 ## 两种保活模式
 
@@ -237,22 +270,3 @@ compose 那份 `docker-compose.yml` 多做了两件事，用 `docker run` 时要
 1. 在面板重新填一次密码（最简单，会用本机钥匙重新加密）
 2. 把老机器的 `data/.secret` 拷过来覆盖
 3. 干脆用 Cookie 模式，不碰密码
-
----
-
-## 从 GitHub 仓库开始使用（补充）
-
-本仓库是**脱敏后的源码快照**：`preview-data/`、`test-data/`、`data/`、`.secret`、`config.json` 与日志均未包含。
-
-1. 克隆后执行 `docker compose up -d --build`（Linux 主机也可用 `deploy.sh` / `install-linux.sh`）。
-2. 浏览器打开 `http://<主机IP>:8580`，在面板里逐个添加账号；`config.json` 会在 `DATA_DIR`（默认 `./data`）下自动生成。
-3. 通知机器人可在面板按账号单独设置，也可用 `WECOM_WEBHOOK` 设全局默认值。
-4. 常用运维脚本：`check.sh`（健康检查）、`rollback.sh`（回滚）、`uninstall-linux.sh`（卸载）。
-
-### 不会进仓库的文件
-
-`.gitignore` 排除了 `data/`、`preview-data/`、`test-data/`、`config.json`、`.secret`、`node_modules/`、`*.log`、`.env`。这些文件含账号、Cookie 与加密密钥，**切勿提交**。
-
-### 安全提示
-
-`passwordEnc` 用本机 `data/.secret` 加密，换机器解不开时按上文「密码解不开怎么办」处理。仅供个人自用与研究，使用前请确认符合服务条款。

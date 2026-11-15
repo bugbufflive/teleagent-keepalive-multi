@@ -55,9 +55,10 @@ function renderList() {
   box.innerHTML = S.accounts.map((a) => {
     const active = a.id === S.selectedId ? ' active' : '';
     const cls = PHASE_CLASS[a.phase] || '';
-    const cookie = a.cookieDaysLeft != null ? `${a.cookieDaysLeft} 天` : (a.hasCookie ? '已配置' : '无');
-    const ins = a.instanceStatus != null ? (STATUS_TEXT[a.instanceStatus] || a.instanceStatus) : '—';
-    return `
+  const cookie = a.cookieDaysLeft != null ? `${a.cookieDaysLeft} 天` : (a.hasCookie ? '已配置' : '无');
+  const ins = a.instanceStatus != null ? (STATUS_TEXT[a.instanceStatus] || a.instanceStatus) : '—';
+  const pts = a.points == null ? '—' : Number(a.points).toLocaleString('zh-CN');
+  return `
       <div class="acc-item${active}" data-id="${esc(a.id)}">
         <div class="acc-top">
           <span class="dot ${cls}"></span>
@@ -66,6 +67,7 @@ function renderList() {
         </div>
         <div class="acc-sub">${esc(a.account || 'Cookie 登录')} · ${esc(PHASE_TEXT[a.phase] || a.phase)}</div>
         <div class="acc-meta">
+          <span>积分 <b>${esc(pts)}</b></span>
           <span>登录态 <b>${esc(cookie)}</b></span>
           <span>实例 <b>${esc(ins)}</b></span>
           <span>循环 <b>${a.cycles || 0}</b></span>
@@ -104,12 +106,17 @@ function renderDetail(force = false) {
 
   const cookie = a.cookieDaysLeft != null ? `${a.cookieDaysLeft} 天` : (a.hasCookie ? '已配置' : '无');
   const ins = a.instanceStatus != null ? (STATUS_TEXT[a.instanceStatus] || `状态 ${a.instanceStatus}`) : '未取到';
+  const pts = a.points == null ? '—' : Number(a.points).toLocaleString('zh-CN');
+  const claimState = a.pointsTodayClaimed == null ? '未知' : (a.pointsTodayClaimed ? '已领' : '未领');
   $('dStats').innerHTML = `
     <span class="stat"><i>账号</i><b>${esc(a.account || '—')}</b></span>
+    <span class="stat"><i>剩余积分</i><b>${esc(pts)}</b></span>
+    <span class="stat"><i>今日领取</i><b>${esc(claimState)}</b></span>
     <span class="stat"><i>登录态</i><b>${esc(cookie)}</b></span>
     <span class="stat"><i>实例</i><b>${esc(ins)}</b></span>
     <span class="stat"><i>最近换票</i><b>${fmtTime(a.lastTicketAt)}</b></span>
     <span class="stat"><i>循环</i><b>${a.cycles || 0} 次</b></span>
+    ${a.pointsError ? `<span class="stat err"><i>积分错误</i><b>${esc(a.pointsError).slice(0, 50)}</b></span>` : ''}
     ${a.lastError ? `<span class="stat err"><i>最近错误</i><b>${esc(a.lastError).slice(0, 60)}</b></span>` : ''}
   `;
 
@@ -128,6 +135,16 @@ function renderDetail(force = false) {
   put('name', a.name || '');
   put('account', a.account || '');
   put('reloginDays', a.reloginDays || 7);
+
+  if (!(document.activeElement === $('pointsAutoClaim') && !force)) $('pointsAutoClaim').checked = a.pointsAutoClaim !== false;
+
+  const pl = [];
+  if (a.pointsDaily) pl.push(`每日可领 ${a.pointsDaily} 分`);
+  if (a.pointsDays) pl.push(`本期已领 ${a.pointsDays} 天 · 累计 ${a.pointsTotal} 分`);
+  if (a.pointsClaimAt) pl.push(`上次领取 ${new Date(a.pointsClaimAt).toLocaleString('zh-CN', { hour12: false })}`);
+  if (a.pointsExpireDays != null) pl.push(`最早到期 ${a.pointsExpireDays} 天后`);
+  if (a.pointsAt) pl.push(`余额更新于 ${fmtTime(a.pointsAt)}`);
+  $('pointsHint').textContent = pl.length ? pl.join(' · ') : '尚未读取积分，点「刷新积分」或等保活循环自动获取';
 
   if (!(document.activeElement === $('autoRelogin') && !force)) $('autoRelogin').checked = a.autoRelogin !== false;
   if (!(document.activeElement === $('wecomWebhook') && !force)) {
@@ -321,6 +338,7 @@ $('saveKeep').addEventListener('click', async () => {
       pauseMin: Number($('pauseMin').value),
       autoRelogin: $('autoRelogin').checked,
       reloginDays: Number($('reloginDays').value),
+      pointsAutoClaim: $('pointsAutoClaim').checked,
       wecomWebhook: $('wecomWebhook').value.trim()
     });
     $('wecomWebhook').value = '';
@@ -329,8 +347,45 @@ $('saveKeep').addEventListener('click', async () => {
   } catch (e) { toast(e.message, true); }
 });
 
-$('restart').addEventListener('click', async () => {
+$('claimPoints').addEventListener('click', async () => {
   const a = sel();
+  if (!a) return toast('先选一个账号', true);
+  const btn = $('claimPoints');
+  btn.disabled = true;
+  btn.textContent = '领取中…';
+  try {
+    const r = await post(`/api/accounts/${encodeURIComponent(a.id)}/points-claim`);
+    toast(r.already
+      ? '今日已领过，无需重复领取'
+      : `领取成功${r.gained ? ' +' + r.gained : ''}，剩余 ${r.balance == null ? '未知' : r.balance}`);
+    await refreshState();
+  } catch (e) {
+    toast('领取失败：' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '立即领取';
+  }
+});
+
+$('refreshPoints').addEventListener('click', async () => {
+  const a = sel();
+  if (!a) return toast('先选一个账号', true);
+  const btn = $('refreshPoints');
+  btn.disabled = true;
+  btn.textContent = '刷新中…';
+  try {
+    await post(`/api/accounts/${encodeURIComponent(a.id)}/points`);
+    toast('积分已刷新');
+    await refreshState();
+  } catch (e) {
+    toast('刷新失败：' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '刷新积分';
+  }
+});
+
+$('restart').addEventListener('click', async () => {  const a = sel();
   if (!a) return toast('先选一个账号', true);
   try { await post(`/api/accounts/${encodeURIComponent(a.id)}/restart`); toast('已重载该账号循环'); refreshState(); }
   catch (e) { toast(e.message, true); }

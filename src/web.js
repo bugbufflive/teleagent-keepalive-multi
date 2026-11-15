@@ -9,6 +9,8 @@
  *   POST /api/accounts/:id/login        账号密码登录（含滑块）
  *   POST /api/accounts/:id/restart      重载该账号循环
  *   POST /api/accounts/:id/checkin      手动打卡
+ *   POST /api/accounts/:id/points       刷新剩余积分 + 每日领取状态
+ *   POST /api/accounts/:id/points-claim 手动领取每日积分
  *   POST /api/accounts/:id/desktop-url  取云电脑网页入口
  *   POST /api/accounts/:id/delete       删除账号
  *   POST /api/notify                    全局通知配置
@@ -63,7 +65,7 @@ function basicAuth(req, password, user) {
 
 const STR_KEYS = ['name', 'mode', 'authMode', 'account', 'cookie', 'instanceId', 'deviceCode', 'osType', 'clientVersion', 'wecomWebhook', 'remark'];
 const NUM_KEYS = ['deviceType', 'refreshSec', 'sessionSec', 'gapSec', 'pingSec', 'pauseMin', 'cookieAlertDays', 'reloginDays'];
-const BOOL_KEYS = ['enabled', 'claim', 'autoRelogin'];
+const BOOL_KEYS = ['enabled', 'claim', 'autoRelogin', 'pointsAutoClaim'];
 
 function pickConfig(body = {}) {
   const patch = {};
@@ -176,6 +178,34 @@ function createServer({ manager, store, logger, dataDir }) {
 
         if (req.method === 'POST' && action === 'checkin') {
           return sendJson(res, { success: true, data: k.checkin(true) });
+        }
+
+        // 刷新剩余积分 + 每日领取状态
+        if (req.method === 'POST' && action === 'points') {
+          if (!k) return sendJson(res, { error: '该账号的保活实例未运行，先启用一次' }, 400);
+          try {
+            await k.refreshPoints();
+            await k.pointTaskStatus();
+            return sendJson(res, { success: true, data: k.status() });
+          } catch (e) {
+            return sendJson(res, { error: e.message }, 500);
+          }
+        }
+
+        // 手动领取每日积分
+        if (req.method === 'POST' && action === 'points-claim') {
+          if (!k) return sendJson(res, { error: '该账号的保活实例未运行，先启用一次' }, 400);
+          try {
+            const r = await k.claimDailyPoints('手动');
+            logger.write(r.already
+              ? `[积分] 今日已领过，剩余 ${r.balance == null ? '未知' : r.balance}`
+              : `[积分] 领取成功 +${r.gained == null ? '?' : r.gained}，剩余 ${r.balance == null ? '未知' : r.balance}`,
+            r.already ? 'info' : 'success', dataDir, { acct: acc.name, acctId: id });
+            return sendJson(res, { success: true, ...r, data: k.status() });
+          } catch (e) {
+            logger.write(`[积分] 领取失败：${e.message}`, 'error', dataDir, { acct: acc.name, acctId: id });
+            return sendJson(res, { error: e.message }, 500);
+          }
         }
 
         if (req.method === 'POST' && action === 'desktop-url') {

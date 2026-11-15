@@ -19,11 +19,20 @@ const { loginByPassword, encryptPassword, decryptPassword } = require('./login')
 const { Notifier } = require('./notify');
 
 const BASE = 'https://agent.teleai.com.cn/teleagent-manager/v1';
+// 积分 / 福利社走的是 meter 服务，跟实例管理不是同一个前缀
+const METER = 'https://agent.teleai.com.cn/meter/super-agent';
+const DAILY_CLAIM_PATH = '/user/portal/companyStore/checkTask?type=daily_login';
+const CLAIMABLE = ['incomplete', 'not_joined', 'fixed'];
+
 const MAGIC = Buffer.from('UkVEUQIAAAACAAAAGgAAAAAAAAABAAEAAAABAAAAEgAAAAkAAAAECAAA', 'base64');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/137.0.0.0';
 
 const STATUS_TEXT = { 3: '已关机', 4: '运行中', 5: '排队中', 100: '运行中' };
 const RUNNING = [4, 100];
+
+// 积分余额最多每 10 分钟刷新一次；自动领取失败后 20 分钟内不重复打接口
+const POINTS_REFRESH_MS = 10 * 60 * 1000;
+const POINTS_CLAIM_RETRY_MS = 20 * 60 * 1000;
 
 class AccountKeeper {
   constructor(opts = {}) {
@@ -57,8 +66,20 @@ class AccountKeeper {
       cookieExp: null,
       cookieDaysLeft: null,
       desktopDown: false,
-      lastDownAt: ''
+      lastDownAt: '',
+      // 积分
+      points: null,              // 当前剩余积分
+      pointsAt: '',              // 余额上次刷新时间
+      pointsTodayClaimed: null,  // 今日是否已领（null = 未知）
+      pointsDays: 0,             // 本期已领天数
+      pointsTotal: 0,            // 本期累计领取积分
+      pointsDaily: 0,            // 每日可领积分
+      pointsExpireAt: '',        // 最早到期时间
+      pointsExpireDays: null,    // 距最早到期还有几天
+      pointsClaimAt: '',         // 上次成功领取时间
+      pointsError: ''
     };
+    this.pointsClaimTryAt = 0;
   }
 
   // ---------- 配置 ----------
@@ -112,6 +133,7 @@ class AccountKeeper {
     this.state.lastLoginAt = new Date().toISOString();
     this.state.lastLoginOk = true;
     this.parseIdentity();
+    this.resetPointsState();
     const until = r.expiresAt ? new Date(r.expiresAt).toLocaleString('zh-CN') : '未知';
     this.notifier.event('relogin', '账号已自动重新登录', `账号：${account}\n新登录态到期：${until}`, 5);
     return r;
@@ -143,6 +165,7 @@ class AccountKeeper {
     this.state.lastLoginAt = new Date().toISOString();
     this.state.lastLoginOk = true;
     this.parseIdentity();
+    this.resetPointsState();
     this.log(`[登录] 成功，登录态已写入（到期 ${r.expiresAt ? new Date(r.expiresAt).toLocaleString('zh-CN') : '未知'}）`, 'success');
     return r;
   }
@@ -290,6 +313,144 @@ class AccountKeeper {
       }
     }
     throw lastErr || new Error('换票失败');
+  }
+
+  // ---------- 积分 / 福利社 ----------
+
+  // 换了登录态以后，积分缓存和「今日已领」判断都得重来
+  resetPointsState() {
+    this.pointsClaimTryAt = 0;
+    Object.assign(this.state, {
+      points: null,
+      pointsAt: '',
+      pointsTodayClaimed: null,
+      pointsDays: 0,
+      pointsTotal: 0,
+      pointsDaily: 0,
+      pointsClaimAt: '',
+      pointsError: ''
+    });
+  }
+
+  meterHeaders() {
+    return {
+      Cookie: this.cfg.cookie,
+      'x-client-platform': 'web',
+      'User-Agent': UA,
+      Referer: 'https://agent.teleai.com.cn/teleagent'
+    };
+  }
+
+  async meterGet(p) {
+    const res = await fetch(METER + p, { headers: this.meterHeaders(), signal: AbortSignal.timeout(20000) });
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch (e) { throw new Error(`积分接口返回非 JSON（HTTP ${res.status}）`); }
+    if (!json || json.code !== 200) {
+      const msg = (json && (json.msg || json.message)) || text.slice(0, 100);
+      throw new Error(`积分接口失败（HTTP ${res.status}）：${msg}`);
+    }
+    return json.data;
+  }
+
+  // 剩余积分 + 最近到期时间
+  async refreshPoints() {
+    const d = await this.meterGet('/user/portal/points/detail');
+    const bal = Number(d && d.pointsBalance);
+    this.state.points = Number.isNaN(bal) ? null : bal;
+    this.state.pointsAt = new Date().toISOString();
+    let earliest = null;
+    for (const g of (d && d.groups) || []) {
+      for (const it of g.active || []) {
+        if (it.isExpired || !it.effectiveEnd) continue;
+        if (Number(it.balance) <= 0) continue;
+        // 服务端给的是北京时间字符串 "2026-11-30 23:59:59"
+        const t = new Date(String(it.effectiveEnd).replace(' ', 'T') + '+08:00').getTime();
+        if (Number.isNaN(t)) continue;
+        if (earliest === null || t < earliest) earliest = t;
+      }
+    }
+    if (earliest) {
+      this.state.pointsExpireAt = new Date(earliest).toISOString();
+      this.state.pointsExpireDays = Math.round(((earliest - Date.now()) / 86400000) * 10) / 10;
+    } else {
+      this.state.pointsExpireAt = '';
+      this.state.pointsExpireDays = null;
+    }
+    return this.state.points;
+  }
+
+  // 每日领取任务的状态（今日是否已领 / 已领天数 / 累计积分）
+  async pointTaskStatus() {
+    const d = await this.meterGet('/user/portal/companyStore/checkDayTask');
+    if (d) {
+      this.state.pointsTodayClaimed = !!d.claimed_today;
+      this.state.pointsDays = Number(d.total_claim_days) || 0;
+      this.state.pointsTotal = Number(d.total_claimed_points) || 0;
+      this.state.pointsDaily = Number(d.daily_claimable_points) || 0;
+    }
+    return d || null;
+  }
+
+  async claimDailyPoints(trigger = '手动') {
+    const before = this.state.points;
+    const st = await this.pointTaskStatus();
+    if (st && st.claimed_today) {
+      this.state.pointsError = '';
+      this.log(`[积分] 今日已领过（本期 ${this.state.pointsDays} 天 / ${this.state.pointsTotal} 分），无需重复领取`, 'info');
+      return { already: true, balance: this.state.points, days: this.state.pointsDays, total: this.state.pointsTotal };
+    }
+
+    // 领取地址优先从 v3 任务里读，平台改路径能自动跟上；读不到就用兜底路径
+    let path = DAILY_CLAIM_PATH;
+    try {
+      const v3 = await this.meterGet('/user/portal/companyStore/v3/checkDayTask');
+      const task = ((v3 && v3.activity_data) || []).find((x) => x.action_type === 'api'
+        && /checkTask/i.test(String(x.jump_url || ''))
+        && CLAIMABLE.includes(x.action_status));
+      if (task) path = String(task.jump_url).replace(/^.*?\/superCowork\/sapi/, '');
+    } catch (e) { /* 用兜底路径 */ }
+
+    await this.meterGet(path);
+    await this.pointTaskStatus().catch(() => null);
+    await this.refreshPoints().catch(() => null);
+
+    const gained = before != null && this.state.points != null ? this.state.points - before : null;
+    this.state.pointsClaimAt = new Date().toISOString();
+    this.state.pointsError = '';
+    if (gained !== null && gained <= 0) {
+      // 接口返回成功但余额没动：多半是今天已经领过，或福利社活动已结束
+      this.log(`[积分] ${trigger}领取接口已调用，但余额未变化（剩余 ${this.state.points}），今日可能已领过或活动已结束`, 'warning');
+      return { already: true, gained: 0, balance: this.state.points, days: this.state.pointsDays, total: this.state.pointsTotal };
+    }
+    this.log(`[积分] ${trigger}领取成功${gained ? ` +${gained}` : ''}，剩余 ${this.state.points == null ? '未知' : this.state.points}，本期已领 ${this.state.pointsDays} 天 / ${this.state.pointsTotal} 分`, 'success');
+    if (trigger !== '手动') {
+      this.notifier.event('points', '积分已自动领取',
+        `账号：${this.cfg.account || this.cfg.name}\n本次：${gained ? '+' + gained : '已完成'}\n剩余：${this.state.points == null ? '未知' : this.state.points}\n本期累计：${this.state.pointsDays} 天 / ${this.state.pointsTotal} 分`,
+        720);
+    }
+    return { already: false, gained, balance: this.state.points, days: this.state.pointsDays, total: this.state.pointsTotal };
+  }
+
+  // 保活循环里调：余额到期就刷新，今天没领就自动领
+  async syncPoints() {
+    if (!this.cfg.cookie) return null;
+    const auto = this.cfg.pointsAutoClaim !== false;
+    const last = this.state.pointsAt ? new Date(this.state.pointsAt).getTime() : 0;
+    const stale = Date.now() - last > POINTS_REFRESH_MS;
+    const dueClaim = auto && this.state.pointsTodayClaimed !== true && Date.now() - this.pointsClaimTryAt > POINTS_CLAIM_RETRY_MS;
+    if (!stale && !dueClaim) return null;
+    if (dueClaim) this.pointsClaimTryAt = Date.now();
+    try {
+      if (dueClaim) await this.claimDailyPoints('自动');
+      else await this.pointTaskStatus().catch(() => null);
+      if (stale) await this.refreshPoints();
+      this.state.pointsError = '';
+    } catch (e) {
+      this.state.pointsError = e.message;
+      this.log(`[积分] 同步失败：${e.message.slice(0, 120)}`, 'warning');
+    }
+    return this.state;
   }
 
   async ensureRunning(ins) {
@@ -494,6 +655,7 @@ class AccountKeeper {
         this.state.lastError = '';
         this.state.accountDead = false;
         this.checkin(false);
+        await this.syncPoints();
         if (this.state.cookieDaysLeft !== null && this.state.cookieDaysLeft <= Number(this.cfg.cookieAlertDays || 3)) {
           this.log(`⚠️ 登录态剩余 ${this.state.cookieDaysLeft} 天，${this.cfg.authMode === 'password' ? '将自动重新登录' : '请重新抓取 Cookie'}`, 'warning');
           if (this.cfg.authMode !== 'password') {
@@ -591,7 +753,8 @@ class AccountKeeper {
       pauseMin: this.cfg.pauseMin,
       pausedUntil: this.pausedUntil ? new Date(this.pausedUntil).toISOString() : null,
       checkin: this.cfg.checkin || { lastDate: '', streak: 0, lastAt: '' },
-      todayChecked: (this.cfg.checkin || {}).lastDate === this.bjDate()
+      todayChecked: (this.cfg.checkin || {}).lastDate === this.bjDate(),
+      pointsAutoClaim: this.cfg.pointsAutoClaim !== false
     };
   }
 }

@@ -3,9 +3,9 @@
  * 单独验证「账号 + 密码」能不能登录，不经过面板、不写任何数据。
  *
  * 用法一（推荐，密码不进 shell 历史）：
- *   PW='你的密码' node src/login-cli.js your_account
+ *   PW='你的密码' node src/login-cli.js 17757383647a
  * 用法二：
- *   node src/login-cli.js your_account '你的密码'
+ *   node src/login-cli.js 17757383647a '你的密码'
  *
  * 返回码：0 = 登录成功；1 = 失败（看打印的 code 与提示）
  */
@@ -34,7 +34,7 @@ if (!account || !password) {
     console.log(`\n[失败] code=${e.code || '-'}  ${e.message}`);
     if (e.code === '10980003') {
       console.log('  含义：服务端解不开请求体，几乎都是「账号名」写法不对（后缀字母大小写）。');
-      console.log('  处理：把账号改成全小写再试，例如 your_account。');
+      console.log('  处理：把账号改成全小写再试，例如 17757383647a。');
     } else if (e.code === '10980039') {
       console.log('  含义：账号名能识别，密码不匹配（或该账号被临时风控锁定）。');
       console.log('  处理：浏览器人工登录一次确认密码；连续失败的话等 15~30 分钟再试。');
