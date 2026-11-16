@@ -96,8 +96,7 @@ function renderList() {
           <span>登录态 <b>${esc(cookie)}</b></span>
           <span>实例 <b>${esc(ins)}</b></span>
           <span>循环 <b>${a.cycles || 0}</b></span>
-          ${a.instanceStartAt && a.instanceRuntimeSec > 0 ? `<span>云电脑 <b>${fmtInstRuntime(a)}</b></span>` : ''}
-          ${a.runningSec > 0 ? `<span>已运行 <b>${fmtUptime(a.runningSec)}</b></span>` : ''}
+          ${a.instanceStartAt && a.instanceRuntimeSec > 0 ? `<span>云电脑运行 <b>${fmtInstRuntime(a)}</b></span>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -150,7 +149,6 @@ function renderDetail(force = false) {
     <span class="stat"><i>实例</i><b>${esc(ins)}</b></span>
     <span class="stat"><i>最近换票</i><b>${fmtTime(a.lastTicketAt)}</b></span>
     <span class="stat"><i>云电脑运行</i><b>${fmtInstRuntime(a)}</b></span>
-    <span class="stat"><i>保活已运行</i><b>${fmtUptime(a.runningSec)}</b></span>
     <span class="stat"><i>循环</i><b>${a.cycles || 0} 次</b></span>
     ${a.pointsError ? `<span class="stat err"><i>积分错误</i><b>${esc(a.pointsError).slice(0, 50)}</b></span>` : ''}
     ${a.lastError ? `<span class="stat err"><i>最近错误</i><b>${esc(a.lastError).slice(0, 60)}</b></span>` : ''}
