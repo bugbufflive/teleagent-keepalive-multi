@@ -73,6 +73,7 @@ class AccountKeeper {
     this.ws = null;
     this.stopped = true;
     this.pausedUntil = 0;
+    this.runStartedAt = 0;   // 本次保活启动时间戳（start 时置位，restart 重置）
     this.state = {
       phase: 'idle',
       accountDead: false,
@@ -834,6 +835,7 @@ class AccountKeeper {
   start() {
     if (!this.stopped) return this.status();
     this.stopped = false;
+    this.runStartedAt = Date.now();   // 每次启动（含 restart）重置计时
     this.loop().catch((e) => this.log(`主循环异常退出: ${e.message}`, 'error'));
     const on = this.cfg.enabled && this.cfg.cookie;
     this.log(on ? `保活已启动（模式：${this.cfg.mode}）` : '保活已加载（未启用 / 未填 Cookie）', on ? 'success' : 'info');
@@ -862,6 +864,10 @@ class AccountKeeper {
       name: this.cfg.name || this.cfg.account || '账号 ' + this.cfg.id.slice(0, 4),
       remark: this.cfg.remark || '',
       enabled: !!this.cfg.enabled,
+      runStartedAt: this.runStartedAt ? new Date(this.runStartedAt).toISOString() : '',
+      runningSec: (this.cfg.enabled && !this.stopped && this.runStartedAt)
+        ? Math.max(0, Math.floor((Date.now() - this.runStartedAt) / 1000))
+        : 0,
       mode: this.cfg.mode,
       authMode: this.cfg.authMode,
       account: this.cfg.account || '',

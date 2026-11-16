@@ -59,6 +59,8 @@ class Manager {
       remark: acc.remark || '',
       phase: acc.enabled ? 'idle' : 'disabled',
       enabled: !!acc.enabled,
+      runStartedAt: '',
+      runningSec: 0,
       mode: acc.mode,
       authMode: acc.authMode,
       account: acc.account || '',
