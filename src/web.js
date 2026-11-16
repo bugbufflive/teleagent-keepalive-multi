@@ -69,9 +69,9 @@ function basicAuth(req, password, user) {
   return safeEqual(u, user) && safeEqual(p, password);
 }
 
-const STR_KEYS = ['name', 'mode', 'authMode', 'account', 'cookie', 'instanceId', 'deviceCode', 'osType', 'clientVersion', 'wecomWebhook', 'remark'];
+const STR_KEYS = ['name', 'mode', 'authMode', 'account', 'cookie', 'instanceId', 'deviceCode', 'osType', 'clientVersion', 'wecomWebhook', 'remark', 'pointsDailyReportAt'];
 const NUM_KEYS = ['deviceType', 'refreshSec', 'sessionSec', 'gapSec', 'pingSec', 'pauseMin', 'cookieAlertDays', 'reloginDays'];
-const BOOL_KEYS = ['enabled', 'claim', 'autoRelogin', 'pointsAutoClaim'];
+const BOOL_KEYS = ['enabled', 'claim', 'autoRelogin', 'pointsAutoClaim', 'pointsDailyReport'];
 
 function pickConfig(body = {}) {
   const patch = {};
@@ -154,6 +154,14 @@ function createServer({ manager, store, logger, dataDir }) {
           const patch = pickConfig(await readBody(req));
           if (patch.mode && !['ticket', 'claim'].includes(patch.mode)) return sendJson(res, { error: 'mode 只能是 ticket 或 claim' }, 400);
           if (patch.authMode && !['cookie', 'password'].includes(patch.authMode)) return sendJson(res, { error: 'authMode 只能是 cookie 或 password' }, 400);
+          if (patch.pointsDailyReportAt !== undefined) {
+            const t = String(patch.pointsDailyReportAt).trim();
+            const mt = t.match(/^(\d{1,2}):(\d{1,2})$/);
+            if (!mt || Number(mt[1]) > 23 || Number(mt[2]) > 59) {
+              return sendJson(res, { error: '播报时间格式应为 HH:mm（如 09:00）' }, 400);
+            }
+            patch.pointsDailyReportAt = `${String(Number(mt[1])).padStart(2, '0')}:${String(Number(mt[2])).padStart(2, '0')}`;
+          }
           manager.update(id, patch);
           const keys = Object.keys(patch).filter((x) => x !== 'cookie' && x !== 'passwordEnc');
           logger.write(`配置已更新：${keys.join(', ') || '无'}${patch.cookie ? '（Cookie 已更新）' : ''}`, 'info', dataDir, { acct: acc.name, acctId: id });
@@ -192,6 +200,20 @@ function createServer({ manager, store, logger, dataDir }) {
           try {
             await k.refreshPoints();
             await k.pointTaskStatus();
+            return sendJson(res, { success: true, data: k.status() });
+          } catch (e) {
+            return sendJson(res, { error: e.message }, 500);
+          }
+        }
+
+        // 立即发一条积分播报（不等定时）
+        if (req.method === 'POST' && action === 'points-report') {
+          if (!k) return sendJson(res, { error: '该账号的保活实例未运行，先启用一次' }, 400);
+          try {
+            const r = await k.sendPointsDailyReport(true);
+            if (r.skipped) return sendJson(res, { error: '播报未发送（检查通知是否开启、webhook 是否配置）' }, 400);
+            if (!r.ok) return sendJson(res, { error: r.error || (r.throttled ? '冷却中，稍后再试' : '推送失败') }, 400);
+            logger.write('[积分] 已手动发送积分播报', 'success', dataDir, { acct: acc.name, acctId: id });
             return sendJson(res, { success: true, data: k.status() });
           } catch (e) {
             return sendJson(res, { error: e.message }, 500);

@@ -23,13 +23,16 @@ teleagent-multi/
 │   ├── teleagent.js   单个账号的保活内核（换票 / claim / 心跳 / 自愈）
 │   ├── login.js       账号密码登录 + 滑块识别（已修 bandFromJigsaw）
 │   ├── crypto.js      AES-256-GCM 密码加解密
-│   ├── notify.js      企业微信机器人推送
+│   ├── notify.js      企业微信机器人推送（按模板渲染）
+│   ├── template.js    通知模板引擎（事件定义 / 变量 / 渲染）
 │   ├── logger.js      内存环形日志 + 文件轮转
 │   └── web.js         HTTP 接口 + 静态页
 ├── public/            控制台前端（原生 JS，无构建）
 ├── Dockerfile
 ├── docker-compose.yml
 ├── deploy.sh          一键部署（WSL/Docker：构建 + 迁移旧数据 + 起容器）
+├── upgrade.sh         升级部署（自动备份 + 保留数据 + 健康检查）
+├── rollback-data.sh   数据回滚（还原到某次备份）
 ├── rollback.sh        回滚到旧版单账号容器
 ├── install-linux.sh   Linux 一键部署（systemd，也可 --docker）
 └── uninstall-linux.sh Linux 卸载
@@ -209,6 +212,7 @@ compose 那份 `docker-compose.yml` 多做了两件事，用 `docker run` 时要
 | POST | `/api/accounts/<id>/checkin` | 签到 |
 | POST | `/api/accounts/<id>/points` | 刷新剩余积分 + 每日领取状态 |
 | POST | `/api/accounts/<id>/points-claim` | 立即领取每日积分 |
+| POST | `/api/accounts/<id>/points-report` | 立即发一条积分播报（不等定时） |
 | POST | `/api/accounts/<id>/desktop-url` | 生成网页版云电脑入口（claim 模式会让位） |
 | POST | `/api/accounts/<id>/delete` | 删除账号 |
 | POST | `/api/notify` | 全局通知配置 |
@@ -249,6 +253,7 @@ compose 那份 `docker-compose.yml` 多做了两件事，用 `docker run` 时要
 | `cookie-expire` | Cookie 快过期 | 账号、剩余天数、时间 |
 | `relogin` | 自动重新登录成功 | 账号、到期、时间 |
 | `points` | 每日积分自动领取成功 | 账号、本次、剩余、累计、时间 |
+| `points-daily` | 每天定时推送积分播报（默认 09:00） | 账号、剩余、今日可领、今日状态、已领天数、累计、最快到期、时间 |
 
 模板里写了该事件不支持的变量时，编辑页会标黄提示「未知变量」，发送时该变量替换成空串。
 
@@ -272,6 +277,53 @@ compose 那份 `docker-compose.yml` 多做了两件事，用 `docker run` 时要
 
 领取前会先读 `checkDayTask`，`claimed_today=true` 就直接跳过，不会重复打接口。积分接口用的是 `/meter/super-agent`，与实例管理接口不同源，但共用同一个 Cookie；Cookie 失效时积分接口报 401，会和保活一起触发自动重登。
 
+### 每日定时积分播报
+
+除了「领取成功」的即时通知，还可以让程序**每天固定时间推一条积分状态汇总**，默认早上 **09:00**（北京时间）。
+
+**开启方式**
+
+账号详情页 →「积分福利社」一栏：
+
+- 勾选「每天定时推送积分播报」
+- 时间框选播报时刻（默认 09:00，可改成任意 `HH:mm`）
+- 点「保存设置」
+- 想先看效果，点「立即播报」立刻发一条
+
+**推送内容**
+
+```
+【TeleAgent保活·会员号A】每日积分播报
+账号：会员号A
+剩余积分：6300
+今日可领：100（已领取）
+本期已领：7 天 / 累计 700 分
+最快到期：2026/11/30（还有 14 天）
+时间：2026/11/16 09:00:00
+```
+
+文案可以在「通知设置 → 模板管理」里改（事件名 `每日积分播报`），可用变量：账号、剩余、今日可领、今日状态、已领天数、累计、最快到期、时间。
+
+**触发规则**
+
+- 按**北京时间**判断，和服务器时区无关（容器已设 `TZ=Asia/Shanghai`）
+- 到点后由保活循环顺带检查并推送，ticket 模式最多延迟 5 分钟，claim 模式约 20 秒
+- **每天只推一次**：当天推过就不再重复；程序重启也不会重推（同一天）
+- 如果 9 点时程序正好离线，恢复后当天仍会补发一次
+- 播报前会重新拉一次余额和领取状态，所以数据是实时的
+
+**对应接口**
+
+```bash
+# 手动发一条播报
+curl -X POST http://127.0.0.1:8580/api/accounts/<id>/points-report
+
+# 改播报时间（北京时间 HH:mm）
+curl -X POST http://127.0.0.1:8580/api/accounts/<id>/config \
+  -H 'Content-Type: application/json' \
+  -d '{"pointsDailyReport":true,"pointsDailyReportAt":"09:00"}'
+```
+
 **对应接口**
 
 ```bash
@@ -281,6 +333,82 @@ curl -H "Cookie: $COOKIE" https://agent.teleai.com.cn/meter/super-agent/user/por
 curl -H "Cookie: $COOKIE" https://agent.teleai.com.cn/meter/super-agent/user/portal/companyStore/checkDayTask
 # 领取
 curl -H "Cookie: $COOKIE" "https://agent.teleai.com.cn/meter/super-agent/user/portal/companyStore/checkTask?type=daily_login"
+```
+
+## 升级：保留数据重新部署（Docker）
+
+数据在**宿主机目录** `/opt/teleagent/teleagent-multi/data/`，通过 `./data:/app/data` 绑定挂载进容器。
+所以只要不动这个目录，账号配置、密码密文、日志、通知模板全都保留。
+
+### 最省事：用自带的 upgrade.sh
+
+```bash
+# 上传新包后
+tar -xzf teleagent-docker-linux-v5-templates.tar.gz
+cd teleagent-multi
+sudo bash upgrade.sh                      # 升级，沿用原端口和密码
+sudo bash upgrade.sh --password '新密码'    # 顺便改面板密码
+```
+
+`upgrade.sh` 依次做：
+
+1. **备份**现有 `data/`（`config.json` + `.secret` + 日志）到 `/opt/teleagent/backups/<时间戳>/`
+2. 停掉旧容器（**不删数据**）
+3. 用 rsync 同步新代码，`--exclude data` 保证不覆盖数据；没装 rsync 就逐项复制，同样不碰 `data/`
+4. 写 `.env`（端口、面板密码）
+5. `docker compose down && up -d --build` 重建镜像
+6. 轮询 `/api/state` 等面板就绪
+7. 读回账号清单，确认数据还在
+8. 保留最近 5 份备份，更早的自动清理
+
+### 手动等价做法
+
+```bash
+cd /opt/teleagent/teleagent-multi
+
+# 1. 先备份（强烈建议）
+mkdir -p /opt/teleagent/backups/$(date +%Y%m%d-%H%M%S)
+cp -a data/. /opt/teleagent/backups/$(date +%Y%m%d-%H%M%S)/
+
+# 2. 停容器（不加 -v！）
+docker compose down
+
+# 3. 换代码，但不要覆盖 data/
+rsync -a --exclude data --exclude node_modules /新代码/teleagent-multi/ .
+
+# 4. 重建启动
+docker compose up -d --build
+
+# 5. 确认
+curl -s http://127.0.0.1:8580/api/state | head -c 200
+```
+
+### 出问题了回滚
+
+```bash
+sudo bash rollback-data.sh                  # 回滚到最近一次备份
+sudo bash rollback-data.sh 20261116-115500  # 回滚到指定时间戳
+```
+
+会停容器、把备份里的 `config.json` / `.secret` / 日志还原回去，再用旧镜像重启。
+
+### 几个容易踩的坑
+
+| 坑 | 说明 |
+|---|---|
+| `docker compose down -v` | **别加 `-v`**，虽然这里用的是绑定挂载不依赖命名卷，但习惯上加 `-v` 容易在其他项目出事 |
+| `.env` 不在 `data/` 里 | 面板密码存在 `.env`，`upgrade.sh` 每次都会重写 —— 不带 `--password` 会把密码清空 |
+| `.secret` 必须一起留 | 这是密码密文的加密密钥，丢了账号里存的密码就解不开，只能重新输密码 |
+| `rsync --exclude data` | 这行是关键，少了会用新代码的空 `data/` 盖掉你的配置 |
+| 首次迁移 | v1 单账号配置首次启动会自动转成 `accounts[0]`，升级不会动它 |
+
+### 数据文件说明
+
+```
+/opt/teleagent/teleagent-multi/data/
+├── config.json   账号配置、通知配置、通知模板（核心，务必备份）
+├── .secret       密码密文密钥（务必备份，丢了要重输密码）
+└── logs/         按天滚转的日志
 ```
 
 ## 两种保活模式

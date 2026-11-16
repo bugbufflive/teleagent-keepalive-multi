@@ -42,6 +42,8 @@ const ACCOUNT_DEFAULTS = {
   wecomWebhook: '',    // 可选：给这个账号单独指定机器人，留空则用全局
   remark: '',
   pointsAutoClaim: true,   // 每天自动领取「积分福利社」每日积分
+  pointsDailyReport: false, // 是否每天定时推送积分播报
+  pointsDailyReportAt: '09:00', // 定时播报时间（北京时间 HH:mm）
   checkin: { lastDate: '', streak: 0, lastAt: '' }
 };
 

@@ -71,8 +71,11 @@
           <h3 class="mt">积分福利社</h3>
           <div class="row">
             <label class="check"><input type="checkbox" id="pointsAutoClaim" /> 每天自动领取每日积分</label>
+            <label class="check"><input type="checkbox" id="pointsDailyReport" /> 每天定时推送积分播报</label>
+            <label class="inline">播报时间 <input id="pointsDailyReportAt" type="time" class="num" style="width:104px" /> （北京时间）</label>
             <button class="btn" id="claimPoints">立即领取</button>
             <button class="btn" id="refreshPoints">刷新积分</button>
+            <button class="btn" id="reportPoints">立即播报</button>
           </div>
           <p class="hint" id="pointsHint"></p>
 

@@ -137,6 +137,8 @@ function renderDetail(force = false) {
   put('reloginDays', a.reloginDays || 7);
 
   if (!(document.activeElement === $('pointsAutoClaim') && !force)) $('pointsAutoClaim').checked = a.pointsAutoClaim !== false;
+  if (!(document.activeElement === $('pointsDailyReport') && !force)) $('pointsDailyReport').checked = a.pointsDailyReport === true;
+  put('pointsDailyReportAt', a.pointsDailyReportAt || '09:00');
 
   const pl = [];
   if (a.pointsDaily) pl.push(`每日可领 ${a.pointsDaily} 分`);
@@ -144,6 +146,8 @@ function renderDetail(force = false) {
   if (a.pointsClaimAt) pl.push(`上次领取 ${new Date(a.pointsClaimAt).toLocaleString('zh-CN', { hour12: false })}`);
   if (a.pointsExpireDays != null) pl.push(`最早到期 ${a.pointsExpireDays} 天后`);
   if (a.pointsAt) pl.push(`余额更新于 ${fmtTime(a.pointsAt)}`);
+  if (a.pointsDailyReport) pl.push(`每天 ${a.pointsDailyReportAt || '09:00'} 推送积分播报`);
+  if (a.pointsReportAt) pl.push(`上次播报 ${new Date(a.pointsReportAt).toLocaleString('zh-CN', { hour12: false })}`);
   $('pointsHint').textContent = pl.length ? pl.join(' · ') : '尚未读取积分，点「刷新积分」或等保活循环自动获取';
 
   if (!(document.activeElement === $('autoRelogin') && !force)) $('autoRelogin').checked = a.autoRelogin !== false;
@@ -339,6 +343,8 @@ $('saveKeep').addEventListener('click', async () => {
       autoRelogin: $('autoRelogin').checked,
       reloginDays: Number($('reloginDays').value),
       pointsAutoClaim: $('pointsAutoClaim').checked,
+      pointsDailyReport: $('pointsDailyReport').checked,
+      pointsDailyReportAt: $('pointsDailyReportAt').value || '09:00',
       wecomWebhook: $('wecomWebhook').value.trim()
     });
     $('wecomWebhook').value = '';
@@ -385,8 +391,25 @@ $('refreshPoints').addEventListener('click', async () => {
   }
 });
 
-$('restart').addEventListener('click', async () => {  const a = sel();
+$('reportPoints').addEventListener('click', async () => {
+  const a = sel();
   if (!a) return toast('先选一个账号', true);
+  const btn = $('reportPoints');
+  btn.disabled = true;
+  btn.textContent = '发送中…';
+  try {
+    await post(`/api/accounts/${encodeURIComponent(a.id)}/points-report`);
+    toast('积分播报已发送');
+    await refreshState();
+  } catch (e) {
+    toast('播报失败：' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '立即播报';
+  }
+});
+
+$('restart').addEventListener('click', async () => {  const a = sel();  if (!a) return toast('先选一个账号', true);
   try { await post(`/api/accounts/${encodeURIComponent(a.id)}/restart`); toast('已重载该账号循环'); refreshState(); }
   catch (e) { toast(e.message, true); }
 });

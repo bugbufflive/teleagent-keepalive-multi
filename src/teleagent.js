@@ -33,6 +33,27 @@ const RUNNING = [4, 100];
 // 积分余额最多每 10 分钟刷新一次；自动领取失败后 20 分钟内不重复打接口
 const POINTS_REFRESH_MS = 10 * 60 * 1000;
 const POINTS_CLAIM_RETRY_MS = 20 * 60 * 1000;
+// 定时积分播报默认时间（北京时间 09:00）
+const POINTS_DAILY_DEFAULT_AT = '09:00';
+
+/** 把 "HH:mm" 解析成当天的分钟数；格式不对返回 null */
+function parseHhMm(s) {
+  const m = String(s || '').trim().match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return h * 60 + min;
+}
+
+/** 当前北京时间（UTC+8）的日期字符串和分钟数 */
+function bjNow(now = Date.now()) {
+  const d = new Date(now + 8 * 3600 * 1000);
+  return {
+    date: d.toISOString().slice(0, 10),
+    minutes: d.getUTCHours() * 60 + d.getUTCMinutes()
+  };
+}
 
 class AccountKeeper {
   constructor(opts = {}) {
@@ -77,6 +98,8 @@ class AccountKeeper {
       pointsExpireAt: '',        // 最早到期时间
       pointsExpireDays: null,    // 距最早到期还有几天
       pointsClaimAt: '',         // 上次成功领取时间
+      pointsReportAt: '',        // 上次定时播报时间
+      pointsReportDate: '',      // 上次播报的北京时间日期（用来保证一天只推一次）
       pointsError: ''
     };
     this.pointsClaimTryAt = 0;
@@ -332,6 +355,8 @@ class AccountKeeper {
       pointsTotal: 0,
       pointsDaily: 0,
       pointsClaimAt: '',
+      pointsReportAt: '',
+      pointsReportDate: '',
       pointsError: ''
     });
   }
@@ -459,6 +484,83 @@ class AccountKeeper {
       this.log(`[积分] 同步失败：${e.message.slice(0, 120)}`, 'warning');
     }
     return this.state;
+  }
+
+  // ---------- 每日定时积分播报 ----------
+
+  /** 播报时间（北京时间 HH:mm），配置无效时回落到默认 09:00 */
+  pointsReportAt() {
+    const raw = String(this.cfg.pointsDailyReportAt || '').trim();
+    const m = parseHhMm(raw);
+    return m === null ? parseHhMm(POINTS_DAILY_DEFAULT_AT) : m;
+  }
+
+  /** 播报时间的人类可读形式，如 "09:00" */
+  pointsReportAtText() {
+    const m = this.pointsReportAt();
+    const h = String(Math.floor(m / 60)).padStart(2, '0');
+    const min = String(m % 60).padStart(2, '0');
+    return `${h}:${min}`;
+  }
+
+  /**
+   * 到点了没？只在北京时间当天、且到达设定时刻之后才算。
+   * 已经播报过今天就不再重复。
+   */
+  pointsReportDue(now = Date.now()) {
+    if (this.cfg.pointsDailyReport !== true) return false;
+    if (!this.cfg.cookie) return false;
+    const { date, minutes } = bjNow(now);
+    if (this.state.pointsReportDate === date) return false;
+    return minutes >= this.pointsReportAt();
+  }
+
+  /**
+   * 推送一条积分状态汇总
+   * @param {boolean} force 手动触发时忽略时间限制
+   */
+  async sendPointsDailyReport(force = false) {
+    if (!force && !this.pointsReportDue()) return { skipped: true };
+    const { date } = bjNow();
+    if (force && this.state.pointsReportDate === date) {
+      // 手动重发允许，但不再改日期标记
+    } else {
+      this.state.pointsReportDate = date;
+    }
+
+    // 先把最新数据拉一遍，播报内容才准
+    try {
+      await this.pointTaskStatus().catch((e) => {
+        this.log(`[积分播报] 领取状态刷新失败：${e.message.slice(0, 100)}`, 'warning');
+      });
+      await this.refreshPoints().catch((e) => {
+        this.log(`[积分播报] 余额刷新失败：${e.message.slice(0, 100)}`, 'warning');
+      });
+    } catch (e) { /* 上面已经 catch，这里兜底 */ }
+
+    const expire = this.state.pointsExpireAt
+      ? `${new Date(this.state.pointsExpireAt).toLocaleDateString('zh-CN')}` +
+        (this.state.pointsExpireDays != null ? `（还有 ${this.state.pointsExpireDays} 天）` : '')
+      : '无';
+
+    this.state.pointsReportAt = new Date().toISOString();
+    const r = await this.notifier.event('points-daily', {
+      账号: this.cfg.name || this.cfg.account || '',
+      剩余: this.state.points == null ? '未知' : this.state.points,
+      今日可领: this.state.pointsDaily == null ? '未知' : this.state.pointsDaily,
+      今日状态: this.state.pointsTodayClaimed === true ? '已领取' : '未领取',
+      已领天数: this.state.pointsDays || 0,
+      累计: `${this.state.pointsTotal || 0} 分`,
+      最快到期: expire,
+      时间: new Date().toLocaleString('zh-CN')
+    }, 60);
+
+    if (r.ok) {
+      this.log(`[积分播报] 已推送每日积分播报（剩余 ${this.state.points == null ? '未知' : this.state.points}）`, 'success');
+    } else if (r.throttled) {
+      this.log('[积分播报] 冷却中，跳过本次播报', 'info');
+    }
+    return r;
   }
 
   async ensureRunning(ins) {
@@ -680,6 +782,7 @@ class AccountKeeper {
         this.state.accountDead = false;
         this.checkin(false);
         await this.syncPoints();
+        await this.sendPointsDailyReport();
         if (this.state.cookieDaysLeft !== null && this.state.cookieDaysLeft <= Number(this.cfg.cookieAlertDays || 3)) {
           this.log(`⚠️ 登录态剩余 ${this.state.cookieDaysLeft} 天，${this.cfg.authMode === 'password' ? '将自动重新登录' : '请重新抓取 Cookie'}`, 'warning');
           if (this.cfg.authMode !== 'password') {
@@ -785,7 +888,11 @@ class AccountKeeper {
       pausedUntil: this.pausedUntil ? new Date(this.pausedUntil).toISOString() : null,
       checkin: this.cfg.checkin || { lastDate: '', streak: 0, lastAt: '' },
       todayChecked: (this.cfg.checkin || {}).lastDate === this.bjDate(),
-      pointsAutoClaim: this.cfg.pointsAutoClaim !== false
+      pointsAutoClaim: this.cfg.pointsAutoClaim !== false,
+      pointsDailyReport: this.cfg.pointsDailyReport === true,
+      pointsDailyReportAt: this.pointsReportAtText(),
+      pointsReportAt: this.state.pointsReportAt || '',
+      pointsReportDate: this.state.pointsReportDate || ''
     };
   }
 }
