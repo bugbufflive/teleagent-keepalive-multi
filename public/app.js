@@ -21,7 +21,7 @@ const PHASE_TEXT = {
 const PHASE_CLASS = { online: 'ok', error: 'err', paused: 'warn', connecting: 'warn', nologin: 'warn' };
 const STATUS_TEXT = { 3: '已关机', 4: '运行中', 5: '排队中', 100: '运行中' };
 
-const S = { accounts: [], notify: {}, selectedId: localStorage.getItem('ta.selected') || '', accSig: '', tpl: { events: [], headTemplate: '' }, tplId: '' };
+const S = { accounts: [], notify: {}, selectedId: localStorage.getItem('ta.selected') || '', accSig: '', tpl: { events: [], headTemplate: '' }, tplId: '', dirty: new Set(), dirtyAcct: '' };
 
 let toastTimer = null;
 function toast(msg, bad) {
@@ -91,6 +91,13 @@ function renderDetail(force = false) {
   const has = !!a;
   $('detailBody').classList.toggle('hidden', !has);
   $('btnEnabled').disabled = !has;
+
+  // 切换账号时清掉「未保存改动」标记
+  const acctKey = has ? a.id : '';
+  if (acctKey !== S.dirtyAcct) {
+    S.dirty = new Set();
+    S.dirtyAcct = acctKey;
+  }
   if (!has) {
     $('dName').textContent = '未选择账号';
     $('dPhase').textContent = '-';
@@ -125,8 +132,16 @@ function renderDetail(force = false) {
   const put = (id, val) => {
     const el = $(id);
     if (!el) return;
+    // 用户改过但还没保存的字段，不被自动刷新覆盖
+    if (S.dirty.has(id)) return;
     if (document.activeElement === el && !force) return;
     el.value = val == null ? '' : val;
+  };
+  // 勾选框同理：脏标记优先于焦点判断
+  const putCheck = (id, on) => {
+    if (S.dirty.has(id)) return;
+    if (document.activeElement === $(id) && !force) return;
+    $(id).checked = !!on;
   };
   put('mode', a.mode || 'ticket');
   put('refreshSec', a.refreshSec || 300);
@@ -136,8 +151,8 @@ function renderDetail(force = false) {
   put('account', a.account || '');
   put('reloginDays', a.reloginDays || 7);
 
-  if (!(document.activeElement === $('pointsAutoClaim') && !force)) $('pointsAutoClaim').checked = a.pointsAutoClaim !== false;
-  if (!(document.activeElement === $('pointsDailyReport') && !force)) $('pointsDailyReport').checked = a.pointsDailyReport === true;
+  putCheck('pointsAutoClaim', a.pointsAutoClaim !== false);
+  putCheck('pointsDailyReport', a.pointsDailyReport === true);
   put('pointsDailyReportAt', a.pointsDailyReportAt || '09:00');
 
   const pl = [];
@@ -167,6 +182,8 @@ function renderDetail(force = false) {
   $('detailHint').textContent = a.phase === 'paused' && a.pausedUntil
     ? `让位中，预计 ${new Date(a.pausedUntil).toLocaleTimeString('zh-CN', { hour12: false })} 恢复`
     : '';
+  // 未保存改动提示优先级最高，放在最后覆盖
+  updateDirtyHint();
 }
 
 function renderSummary() {
@@ -348,8 +365,10 @@ $('saveKeep').addEventListener('click', async () => {
       wecomWebhook: $('wecomWebhook').value.trim()
     });
     $('wecomWebhook').value = '';
+    S.dirty.clear();
     toast('设置已保存');
     refreshState();
+    updateDirtyHint();
   } catch (e) { toast(e.message, true); }
 });
 
@@ -695,6 +714,41 @@ $('tplHead').addEventListener('change', async () => {
     await loadTemplates();
   } catch (e) { toast(e.message, true); }
 });
+
+// ---------------- 未保存改动追踪 ----------------
+// 面板每 4 秒自动刷新一次，用户刚勾选/改过的字段不能被服务端的旧值冲掉。
+// 这里记录哪些字段被用户动过，保存成功后再清空。
+
+const DIRTY_FIELDS = [
+  'mode', 'refreshSec', 'instanceId', 'pauseMin', 'name', 'account', 'reloginDays',
+  'pointsAutoClaim', 'pointsDailyReport', 'pointsDailyReportAt',
+  'autoRelogin', 'wecomWebhook', 'cookie'
+];
+
+DIRTY_FIELDS.forEach((id) => {
+  const el = $(id);
+  if (!el) return;
+  const mark = () => {
+    S.dirty.add(id);
+    updateDirtyHint();
+  };
+  el.addEventListener('input', mark);
+  el.addEventListener('change', mark);
+});
+
+// 有未保存改动时给个提示，避免用户以为已经存上了
+function updateDirtyHint() {
+  const n = S.dirty.size;
+  const hint = $('detailHint');
+  if (!hint) return;
+  if (n > 0) {
+    hint.textContent = `有 ${n} 项改动未保存，记得点「保存设置」`;
+    hint.style.color = 'var(--warn)';
+  } else {
+    hint.textContent = '';
+    hint.style.color = '';
+  }
+}
 
 refreshState();
 refreshLogs();
