@@ -44,6 +44,9 @@ const ACCOUNT_DEFAULTS = {
   pointsAutoClaim: true,   // 每天自动领取「积分福利社」每日积分
   pointsDailyReport: false, // 是否每天定时推送积分播报
   pointsDailyReportAt: '09:00', // 定时播报时间（北京时间 HH:mm）
+  // 云电脑本次开机时间（持久化：程序重启后不归零，接着算运行时长）
+  instanceStartAt: '',       // ISO 开机时间；观测到实例 非运行→运行 跳变时记录并写盘
+  instanceEstStart: false,   // 开机时间是否估算（程序启动时实例已在运行的情况）
   checkin: { lastDate: '', streak: 0, lastAt: '' }
 };
 

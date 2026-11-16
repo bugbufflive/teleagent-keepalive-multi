@@ -90,9 +90,10 @@ class AccountKeeper {
       lastTicketAt: '',
       lastConnectAt: '',
       instanceStatus: null,
-      instanceStartAt: '',       // 实例本次开机时间（观测到 非运行→运行 跳变时记录）
-      instanceRuntimeSec: 0,     // 实例本次已开机秒数
-      instanceEstStart: false,   // 开机时间是否为估算（程序启动时实例已在运行的情况）
+      // 从 cfg 恢复持久化值：程序重启后接着算，不归零
+      instanceStartAt: this.cfg.instanceStartAt || '',  // 实例本次开机时间（持久化）
+      instanceRuntimeSec: 0,                            // 实例本次已开机秒数（实时算）
+      instanceEstStart: !!this.cfg.instanceEstStart,    // 开机时间是否为估算
       cycles: 0,
       cookieExp: null,
       cookieDaysLeft: null,
@@ -266,6 +267,7 @@ class AccountKeeper {
   }
 
   // 观测实例状态跳变，记录本次开机时间（instance/list 不返回开机时间，只能靠跳变推断）
+  // 开机时间持久化到 config.json：程序重启后读回接着算，不再从 0 开始。
   noteInstanceStatus(status) {
     const prev = this._lastInsStatus;
     this._lastInsStatus = status;
@@ -274,22 +276,37 @@ class AccountKeeper {
 
     if (isRunning && !wasRunning) {
       // 非运行 → 运行：本次开机起点
-      // 若 prev===null（程序刚启动首次观测到实例已运行），开机时间未知，用当前时间估算
-      const estimated = prev === null;
-      this.state.instanceStartAt = new Date().toISOString();
-      this.state.instanceEstStart = estimated;
-      this.state.instanceRuntimeSec = 0;
-      if (estimated) {
-        this.log('[实例] 首次观测到实例已运行，开机时间未知，从现在开始计时（估算）', 'info');
+      // 若已有"新鲜"的持久化开机时间（程序重启后首次观测），直接沿用，不重新计时。
+      // 若持久化值距今已超过上限+余量（说明程序长期没跑、记录过期），则重新计时。
+      const saved = this.state.instanceStartAt ? new Date(this.state.instanceStartAt).getTime() : 0;
+      const fresh = saved && !Number.isNaN(saved) && (Date.now() - saved) < (INSTANCE_LIMIT_SEC + 3600) * 1000;
+      if (fresh) {
+        this.log(`[实例] 沿用持久化的开机时间 ${this.state.instanceStartAt}，继续计时`, 'info');
       } else {
-        this.log('[实例] 检测到实例已开机，开始记录云电脑运行时间', 'success');
+        // 无有效持久化值：prev===null 说明程序启动时实例已在运行，开机时间未知，用当前时间估算
+        const estimated = prev === null;
+        this.state.instanceStartAt = new Date().toISOString();
+        this.state.instanceEstStart = estimated;
+        this.state.instanceRuntimeSec = 0;
+        this.saveCfg({
+          instanceStartAt: this.state.instanceStartAt,
+          instanceEstStart: this.state.instanceEstStart
+        });  // 立刻写盘
+        if (estimated) {
+          this.log('[实例] 首次观测到实例已运行，开机时间未知，从现在开始计时（估算，已持久化）', 'info');
+        } else {
+          this.log('[实例] 检测到实例已开机，开始记录云电脑运行时间（已持久化）', 'success');
+        }
       }
-    } else if (!isRunning && wasRunning) {
-      // 运行 → 非运行：实例关机，清零
-      this.state.instanceStartAt = '';
-      this.state.instanceRuntimeSec = 0;
-      this.state.instanceEstStart = false;
-      this.log('[实例] 检测到实例已关机，云电脑运行时间已清零', 'warning');
+    } else if (!isRunning) {
+      // 实例当前非运行（含首次观测就关机、或运行→关机）：清零并写盘，避免旧值残留到下次开机
+      if (this.state.instanceStartAt) {
+        this.state.instanceStartAt = '';
+        this.state.instanceRuntimeSec = 0;
+        this.state.instanceEstStart = false;
+        this.saveCfg({ instanceStartAt: '', instanceEstStart: false });
+        this.log('[实例] 实例未运行，云电脑运行时间已清零', 'warning');
+      }
     }
 
     // 无论跳变与否，实时刷新运行时长
