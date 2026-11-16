@@ -170,7 +170,7 @@ class AccountKeeper {
     if (this.cfg.authMode !== 'password' || !this.cfg.autoRelogin) return false;
     if (!this.cfg.account || !this.cfg.passwordEnc) return false;
     const days = this.state.cookieDaysLeft;
-    const need = !this.cfg.cookie || this.state.accountDead || (days !== null && days <= Number(this.cfg.reloginDays || 7));
+    const need = !this.cfg.cookie || this.state.accountDead || (days !== null && days <= Number(this.cfg.reloginDays || 20));
     if (!need) return false;
     await this.doLogin(days === null ? '检查登录态' : `登录态剩余 ${days} 天，提前续期`);
     return true;
@@ -641,7 +641,7 @@ class AccountKeeper {
     this.log(`[连接] desktopId=${desktopId} 网关=${di.clinkLvsOutHost} 目标=${di.host}:${di.port}`, 'info');
 
     const wsUrl = `wss://${di.clinkLvsOutHost}/clinkProxy/${desktopId}/MAIN`;
-    const holdMs = Math.max(15, Number(this.cfg.sessionSec) || 600) * 1000;
+    const holdMs = Math.max(15, Number(this.cfg.sessionSec) || 3600) * 1000;
 
     return await new Promise((resolve) => {
       let done = false;
@@ -783,7 +783,7 @@ class AccountKeeper {
         this.checkin(false);
         await this.syncPoints();
         await this.sendPointsDailyReport();
-        if (this.state.cookieDaysLeft !== null && this.state.cookieDaysLeft <= Number(this.cfg.cookieAlertDays || 3)) {
+        if (this.state.cookieDaysLeft !== null && this.state.cookieDaysLeft <= Number(this.cfg.cookieAlertDays || 7)) {
           this.log(`⚠️ 登录态剩余 ${this.state.cookieDaysLeft} 天，${this.cfg.authMode === 'password' ? '将自动重新登录' : '请重新抓取 Cookie'}`, 'warning');
           if (this.cfg.authMode !== 'password') {
             this.notifier.event('cookie-expire', {
@@ -825,8 +825,8 @@ class AccountKeeper {
         this.pausedUntil = 0;
       }
       const waitSec = this.cfg.mode === 'claim'
-        ? Math.max(5, Number(this.cfg.gapSec) || 20)
-        : Math.max(60, Number(this.cfg.refreshSec) || 300);
+        ? Math.max(5, Number(this.cfg.gapSec) || 10)
+        : Math.max(60, Number(this.cfg.refreshSec) || 120);
       await sleep(waitSec * 1000);
     }
   }

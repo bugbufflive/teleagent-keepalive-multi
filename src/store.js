@@ -25,20 +25,20 @@ const ACCOUNT_DEFAULTS = {
   account: '',         // 登录账号
   passwordEnc: '',     // 密码密文
   autoRelogin: true,
-  reloginDays: 7,
+  reloginDays: 20,      // 提前 20 天续期（原 7），登录态更耐用到期
   cookie: '',
   instanceId: '',
   deviceCode: '',
   deviceType: 60,
   clientVersion: '103020001',
   osType: 'Windows',
-  refreshSec: 300,
-  sessionSec: 600,
-  gapSec: 20,
-  pingSec: 5,
+  refreshSec: 120,      // ticket 换票间隔 120s（原 300），活跃刷新更密、实例更不易被回收
+  sessionSec: 3600,     // claim 单次会话保持 3600s（原 600），挂机更久
+  gapSec: 10,           // claim 会话轮换间隙 10s（原 20），衔接更紧
+  pingSec: 5,           // 心跳间隔 5s，保持连接活跃
   claim: true,
   pauseMin: 10,
-  cookieAlertDays: 3,
+  cookieAlertDays: 7,   // 提前 7 天提醒（原 3）
   wecomWebhook: '',    // 可选：给这个账号单独指定机器人，留空则用全局
   remark: '',
   pointsAutoClaim: true,   // 每天自动领取「积分福利社」每日积分
@@ -55,6 +55,16 @@ const NOTIFY_DEFAULTS = {
   notifyRecover: true,
   headTemplate: DEFAULT_HEAD,   // 消息标题前缀模板
   templates: {}                 // 用户自定义的通知模板（id -> {title, body}）
+};
+
+// 长保活参数迁移表：老账号若某字段仍是「旧默认值」，说明用户没改过，自动升级到新值。
+// 用户手动调整过的非默认值一律保留，不覆盖。
+const KEEPALIVE_UPGRADE = {
+  refreshSec:      { from: 300, to: 120 },
+  sessionSec:      { from: 600, to: 3600 },
+  gapSec:          { from: 20,  to: 10 },
+  reloginDays:     { from: 7,   to: 20 },
+  cookieAlertDays: { from: 3,   to: 7 }
 };
 
 function newId() {
@@ -110,7 +120,11 @@ class Store {
       this.migrated = true;
     }
 
-    let dirty = this.migrated;
+    // 检测原始配置里是否存在待升级的旧默认值（用 raw 判断，避免新账号被误标脏）
+    const needKeepaliveMigrate = (Array.isArray(raw.accounts) ? raw.accounts : [])
+      .some((a) => Object.entries(KEEPALIVE_UPGRADE).some(([k, { from }]) => a[k] === from));
+
+    let dirty = this.migrated || needKeepaliveMigrate;
     for (const a of this.data.accounts) {
       if (!a.deviceCode) { a.deviceCode = newDeviceCode(); dirty = true; }
       if (!a.id) { a.id = newId(); dirty = true; }
@@ -126,6 +140,10 @@ class Store {
       id: a.id || newId(),
       checkin: { ...ACCOUNT_DEFAULTS.checkin, ...(a.checkin || {}) }
     };
+    // 迁移老账号：仍是旧默认值的保活参数升级到长保活值；用户自定义值不动
+    for (const [key, { from, to }] of Object.entries(KEEPALIVE_UPGRADE)) {
+      if (acc[key] === from) acc[key] = to;
+    }
     if (!acc.deviceCode) acc.deviceCode = newDeviceCode();
     return acc;
   }

@@ -88,6 +88,9 @@
               </select>
             </label>
             <label>换票间隔（秒）<input id="refreshSec" type="number" min="60" /></label>
+            <label>会话保持（秒）<input id="sessionSec" type="number" min="60" title="claim 模式单次连接时长，默认 3600" /></label>
+            <label>轮换间隙（秒）<input id="gapSec" type="number" min="5" title="claim 模式两次会话之间的间隔，默认 10" /></label>
+            <label>心跳间隔（秒）<input id="pingSec" type="number" min="3" title="claim 模式心跳包间隔，默认 5" /></label>
             <label>实例 ID<input id="instanceId" placeholder="留空自动取第一个" /></label>
             <label>让位分钟<input id="pauseMin" type="number" min="1" /></label>
             <label>显示名<input id="name" placeholder="例如：会员号A / 公司号" /></label>

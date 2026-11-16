@@ -144,12 +144,15 @@ function renderDetail(force = false) {
     $(id).checked = !!on;
   };
   put('mode', a.mode || 'ticket');
-  put('refreshSec', a.refreshSec || 300);
+  put('refreshSec', a.refreshSec || 120);
+  put('sessionSec', a.sessionSec || 3600);
+  put('gapSec', a.gapSec || 10);
+  put('pingSec', a.pingSec || 5);
   put('instanceId', a.instanceId || '');
   put('pauseMin', a.pauseMin || 10);
   put('name', a.name || '');
   put('account', a.account || '');
-  put('reloginDays', a.reloginDays || 7);
+  put('reloginDays', a.reloginDays || 20);
 
   putCheck('pointsAutoClaim', a.pointsAutoClaim !== false);
   putCheck('pointsDailyReport', a.pointsDailyReport === true);
@@ -355,6 +358,9 @@ $('saveKeep').addEventListener('click', async () => {
       name: $('name').value.trim() || a.name,
       mode: $('mode').value,
       refreshSec: Number($('refreshSec').value),
+      sessionSec: Number($('sessionSec').value),
+      gapSec: Number($('gapSec').value),
+      pingSec: Number($('pingSec').value),
       instanceId: $('instanceId').value.trim(),
       pauseMin: Number($('pauseMin').value),
       autoRelogin: $('autoRelogin').checked,
@@ -720,7 +726,7 @@ $('tplHead').addEventListener('change', async () => {
 // 这里记录哪些字段被用户动过，保存成功后再清空。
 
 const DIRTY_FIELDS = [
-  'mode', 'refreshSec', 'instanceId', 'pauseMin', 'name', 'account', 'reloginDays',
+  'mode', 'refreshSec', 'sessionSec', 'gapSec', 'pingSec', 'instanceId', 'pauseMin', 'name', 'account', 'reloginDays',
   'pointsAutoClaim', 'pointsDailyReport', 'pointsDailyReportAt',
   'autoRelogin', 'wecomWebhook', 'cookie'
 ];
