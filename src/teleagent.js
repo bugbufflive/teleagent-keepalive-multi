@@ -30,6 +30,11 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/137.0.0.0';
 const STATUS_TEXT = { 3: '已关机', 4: '运行中', 5: '排队中', 100: '运行中' };
 const RUNNING = [4, 100];
 
+// 平台「单次连续开机上限 8 小时」策略：运行到该时长会被强制关机。
+// 预警阈值提前 1 小时，让用户有时间准备（比如手动续时/重开）。
+const INSTANCE_LIMIT_SEC = 8 * 3600;
+const INSTANCE_WARN_SEC = 7 * 3600;
+
 // 积分余额最多每 10 分钟刷新一次；自动领取失败后 20 分钟内不重复打接口
 const POINTS_REFRESH_MS = 10 * 60 * 1000;
 const POINTS_CLAIM_RETRY_MS = 20 * 60 * 1000;
@@ -74,6 +79,7 @@ class AccountKeeper {
     this.stopped = true;
     this.pausedUntil = 0;
     this.runStartedAt = 0;   // 本次保活启动时间戳（start 时置位，restart 重置）
+    this._lastInsStatus = null;  // 上次观测到的实例真实状态（instance/list 的 status）
     this.state = {
       phase: 'idle',
       accountDead: false,
@@ -84,6 +90,9 @@ class AccountKeeper {
       lastTicketAt: '',
       lastConnectAt: '',
       instanceStatus: null,
+      instanceStartAt: '',       // 实例本次开机时间（观测到 非运行→运行 跳变时记录）
+      instanceRuntimeSec: 0,     // 实例本次已开机秒数
+      instanceEstStart: false,   // 开机时间是否为估算（程序启动时实例已在运行的情况）
       cycles: 0,
       cookieExp: null,
       cookieDaysLeft: null,
@@ -251,8 +260,51 @@ class AccountKeeper {
     const ins = this.cfg.instanceId ? list.find((x) => x.id === this.cfg.instanceId) : list[0];
     if (!ins) throw new Error('配置的 instanceId 不存在，请检查或清空后自动选取');
     if (!this.cfg.instanceId) this.saveCfg({ instanceId: ins.id });
+    this.noteInstanceStatus(ins.status);
     this.state.instanceStatus = ins.status;
     return ins;
+  }
+
+  // 观测实例状态跳变，记录本次开机时间（instance/list 不返回开机时间，只能靠跳变推断）
+  noteInstanceStatus(status) {
+    const prev = this._lastInsStatus;
+    this._lastInsStatus = status;
+    const wasRunning = prev !== null && RUNNING.includes(prev);
+    const isRunning = RUNNING.includes(status);
+
+    if (isRunning && !wasRunning) {
+      // 非运行 → 运行：本次开机起点
+      // 若 prev===null（程序刚启动首次观测到实例已运行），开机时间未知，用当前时间估算
+      const estimated = prev === null;
+      this.state.instanceStartAt = new Date().toISOString();
+      this.state.instanceEstStart = estimated;
+      this.state.instanceRuntimeSec = 0;
+      if (estimated) {
+        this.log('[实例] 首次观测到实例已运行，开机时间未知，从现在开始计时（估算）', 'info');
+      } else {
+        this.log('[实例] 检测到实例已开机，开始记录云电脑运行时间', 'success');
+      }
+    } else if (!isRunning && wasRunning) {
+      // 运行 → 非运行：实例关机，清零
+      this.state.instanceStartAt = '';
+      this.state.instanceRuntimeSec = 0;
+      this.state.instanceEstStart = false;
+      this.log('[实例] 检测到实例已关机，云电脑运行时间已清零', 'warning');
+    }
+
+    // 无论跳变与否，实时刷新运行时长
+    this.refreshInstanceRuntime();
+  }
+
+  liveInstanceRuntime() {
+    if (!this.state.instanceStartAt || !RUNNING.includes(this._lastInsStatus)) return 0;
+    const start = new Date(this.state.instanceStartAt).getTime();
+    if (Number.isNaN(start)) return 0;
+    return Math.max(0, Math.floor((Date.now() - start) / 1000));
+  }
+
+  refreshInstanceRuntime() {
+    this.state.instanceRuntimeSec = this.liveInstanceRuntime();
   }
 
   async startInstance() {
@@ -868,6 +920,13 @@ class AccountKeeper {
       runningSec: (this.cfg.enabled && !this.stopped && this.runStartedAt)
         ? Math.max(0, Math.floor((Date.now() - this.runStartedAt) / 1000))
         : 0,
+      // 云电脑实例本次开机运行时长 + 平台 8 小时上限预警
+      // 实时计算，避免面板 4 秒刷新时数字卡住（resolveInstance 可能 120 秒才跑一次）
+      instanceStartAt: this.state.instanceStartAt,
+      instanceRuntimeSec: this.liveInstanceRuntime(),
+      instanceEstStart: !!this.state.instanceEstStart,
+      instanceLimitSec: INSTANCE_LIMIT_SEC,
+      instanceWarn: !!(this.liveInstanceRuntime() >= INSTANCE_WARN_SEC),
       mode: this.cfg.mode,
       authMode: this.cfg.authMode,
       account: this.cfg.account || '',

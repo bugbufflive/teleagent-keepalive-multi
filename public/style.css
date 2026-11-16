@@ -96,6 +96,11 @@ body {
 .stat i { color: var(--muted); font-style: normal; }
 .stat b { color: var(--text); font-weight: 600; }
 .stat.err b { color: var(--err); }
+/* 云电脑运行时长：接近 8 小时上限时高亮提醒 */
+.inst-run { font-weight: 600; }
+.inst-warn { color: var(--warn); animation: instPulse 1.6s ease-in-out infinite; }
+.dim { color: var(--muted); }
+@keyframes instPulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
 
 label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
 input, select, textarea {

@@ -54,6 +54,17 @@ const fmtUptime = (sec) => {
   return `${s}秒`;
 };
 
+// 云电脑运行时长：带 8 小时上限预警。estimated=开机时间估算值（前面加 ~）
+const fmtInstRuntime = (a) => {
+  const sec = a.instanceRuntimeSec || 0;
+  if (!a.instanceStartAt || sec <= 0) return '<span class="dim">未运行</span>';
+  const prefix = a.instanceEstStart ? '~' : '';
+  const warn = a.instanceWarn ? ' inst-warn' : '';
+  const left = (a.instanceLimitSec || 28800) - sec;
+  const tip = left > 0 ? `距 8 小时上限 ${fmtUptime(left)}` : '已达 8 小时上限，可能随时被强制关机';
+  return `<span class="inst-run${warn}" title="${tip}">${prefix}${fmtUptime(sec)}</span>`;
+};
+
 const sel = () => S.accounts.find((a) => a.id === S.selectedId) || null;
 
 // ---------------- 列表 ----------------
@@ -85,6 +96,7 @@ function renderList() {
           <span>登录态 <b>${esc(cookie)}</b></span>
           <span>实例 <b>${esc(ins)}</b></span>
           <span>循环 <b>${a.cycles || 0}</b></span>
+          ${a.instanceStartAt && a.instanceRuntimeSec > 0 ? `<span>云电脑 <b>${fmtInstRuntime(a)}</b></span>` : ''}
           ${a.runningSec > 0 ? `<span>已运行 <b>${fmtUptime(a.runningSec)}</b></span>` : ''}
         </div>
       </div>`;
@@ -137,7 +149,8 @@ function renderDetail(force = false) {
     <span class="stat"><i>登录态</i><b>${esc(cookie)}</b></span>
     <span class="stat"><i>实例</i><b>${esc(ins)}</b></span>
     <span class="stat"><i>最近换票</i><b>${fmtTime(a.lastTicketAt)}</b></span>
-    <span class="stat"><i>已运行</i><b>${fmtUptime(a.runningSec)}</b></span>
+    <span class="stat"><i>云电脑运行</i><b>${fmtInstRuntime(a)}</b></span>
+    <span class="stat"><i>保活已运行</i><b>${fmtUptime(a.runningSec)}</b></span>
     <span class="stat"><i>循环</i><b>${a.cycles || 0} 次</b></span>
     ${a.pointsError ? `<span class="stat err"><i>积分错误</i><b>${esc(a.pointsError).slice(0, 50)}</b></span>` : ''}
     ${a.lastError ? `<span class="stat err"><i>最近错误</i><b>${esc(a.lastError).slice(0, 60)}</b></span>` : ''}
