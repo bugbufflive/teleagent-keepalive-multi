@@ -54,14 +54,23 @@ const fmtUptime = (sec) => {
   return `${s}秒`;
 };
 
-// 云电脑运行时长：带 8 小时上限预警。estimated=开机时间估算值（前面加 ~）
+// 云电脑运行时长：带上限预警（上限时长由账号配置 instanceLimitMin 决定，默认60分钟）
+// estimated=开机时间估算值（前面加 ~）
 const fmtInstRuntime = (a) => {
   const sec = a.instanceRuntimeSec || 0;
   if (!a.instanceStartAt || sec <= 0) return '<span class="dim">未运行</span>';
   const prefix = a.instanceEstStart ? '~' : '';
   const warn = a.instanceWarn ? ' inst-warn' : '';
-  const left = (a.instanceLimitSec || 28800) - sec;
-  const tip = left > 0 ? `距 8 小时上限 ${fmtUptime(left)}` : '已达 8 小时上限，可能随时被强制关机';
+  const limit = a.instanceLimitSec || 0;
+  let tip = '';
+  if (limit > 0) {
+    const left = limit - sec;
+    tip = left > 0
+      ? `距 ${fmtUptime(limit)} 上限还有 ${fmtUptime(left)}`
+      : `已达 ${fmtUptime(limit)} 上限，可能随时被强制关机`;
+  } else {
+    tip = '未设置时长上限';
+  }
   return `<span class="inst-run${warn}" title="${tip}">${prefix}${fmtUptime(sec)}</span>`;
 };
 
@@ -175,6 +184,8 @@ function renderDetail(force = false) {
   put('sessionSec', a.sessionSec || 3600);
   put('gapSec', a.gapSec || 10);
   put('pingSec', a.pingSec || 5);
+  put('instanceLimitMin', a.instanceLimitMin == null ? 60 : a.instanceLimitMin);
+  put('instanceWarnMin', a.instanceWarnMin == null ? 50 : a.instanceWarnMin);
   put('instanceId', a.instanceId || '');
   put('pauseMin', a.pauseMin || 10);
   put('name', a.name || '');
@@ -388,6 +399,8 @@ $('saveKeep').addEventListener('click', async () => {
       sessionSec: Number($('sessionSec').value),
       gapSec: Number($('gapSec').value),
       pingSec: Number($('pingSec').value),
+      instanceLimitMin: Number($('instanceLimitMin').value),
+      instanceWarnMin: Number($('instanceWarnMin').value),
       instanceId: $('instanceId').value.trim(),
       pauseMin: Number($('pauseMin').value),
       autoRelogin: $('autoRelogin').checked,
@@ -753,7 +766,7 @@ $('tplHead').addEventListener('change', async () => {
 // 这里记录哪些字段被用户动过，保存成功后再清空。
 
 const DIRTY_FIELDS = [
-  'mode', 'refreshSec', 'sessionSec', 'gapSec', 'pingSec', 'instanceId', 'pauseMin', 'name', 'account', 'reloginDays',
+  'mode', 'refreshSec', 'sessionSec', 'gapSec', 'pingSec', 'instanceLimitMin', 'instanceWarnMin', 'instanceId', 'pauseMin', 'name', 'account', 'reloginDays',
   'pointsAutoClaim', 'pointsDailyReport', 'pointsDailyReportAt',
   'autoRelogin', 'wecomWebhook', 'cookie'
 ];

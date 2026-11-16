@@ -61,11 +61,27 @@ class Manager {
       enabled: !!acc.enabled,
       runStartedAt: '',
       runningSec: 0,
-      instanceStartAt: '',
+      instanceStartAt: acc.instanceStartAt || '',
       instanceRuntimeSec: 0,
-      instanceEstStart: false,
-      instanceLimitSec: 8 * 3600,
+      instanceEstStart: !!acc.instanceEstStart,
+      instanceLimitSec: (() => {
+        const m = Number(acc.instanceLimitMin);
+        if (!Number.isFinite(m) || m < 0) return 60 * 60;
+        return m === 0 ? 0 : m * 60;
+      })(),
+      instanceWarnSec: (() => {
+        const m = Number(acc.instanceWarnMin);
+        const w = (Number.isFinite(m) && m > 0 ? m : 50) * 60;
+        const lim = (() => {
+          const x = Number(acc.instanceLimitMin);
+          if (!Number.isFinite(x) || x < 0) return 60 * 60;
+          return x === 0 ? 0 : x * 60;
+        })();
+        return lim <= 0 ? 0 : Math.min(w, lim);
+      })(),
       instanceWarn: false,
+      instanceLimitMin: Number(acc.instanceLimitMin) || 0,
+      instanceWarnMin: Number(acc.instanceWarnMin) || 0,
       mode: acc.mode,
       authMode: acc.authMode,
       account: acc.account || '',

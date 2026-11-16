@@ -70,7 +70,7 @@ function basicAuth(req, password, user) {
 }
 
 const STR_KEYS = ['name', 'mode', 'authMode', 'account', 'cookie', 'instanceId', 'deviceCode', 'osType', 'clientVersion', 'wecomWebhook', 'remark', 'pointsDailyReportAt'];
-const NUM_KEYS = ['deviceType', 'refreshSec', 'sessionSec', 'gapSec', 'pingSec', 'pauseMin', 'cookieAlertDays', 'reloginDays'];
+const NUM_KEYS = ['deviceType', 'refreshSec', 'sessionSec', 'gapSec', 'pingSec', 'pauseMin', 'cookieAlertDays', 'reloginDays', 'instanceLimitMin', 'instanceWarnMin'];
 const BOOL_KEYS = ['enabled', 'claim', 'autoRelogin', 'pointsAutoClaim', 'pointsDailyReport'];
 
 function pickConfig(body = {}) {

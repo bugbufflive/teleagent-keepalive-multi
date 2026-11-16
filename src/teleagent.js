@@ -30,10 +30,9 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/137.0.0.0';
 const STATUS_TEXT = { 3: '已关机', 4: '运行中', 5: '排队中', 100: '运行中' };
 const RUNNING = [4, 100];
 
-// 平台「单次连续开机上限 8 小时」策略：运行到该时长会被强制关机。
-// 预警阈值提前 1 小时，让用户有时间准备（比如手动续时/重开）。
-const INSTANCE_LIMIT_SEC = 8 * 3600;
-const INSTANCE_WARN_SEC = 7 * 3600;
+// 云电脑运行时长上限/预警已改为账号级可配置（instanceLimitMin / instanceWarnMin，默认 60/50 分钟）。
+// 背景：天翼云公众版规则是「客户端断开连接 1 小时休眠，24 小时关机」——不是固定开机上限，
+// 因此默认模式改为 claim（保持真实连接计入在线），并把默认上限设为 60 分钟便于提醒。
 
 // 积分余额最多每 10 分钟刷新一次；自动领取失败后 20 分钟内不重复打接口
 const POINTS_REFRESH_MS = 10 * 60 * 1000;
@@ -279,7 +278,10 @@ class AccountKeeper {
       // 若已有"新鲜"的持久化开机时间（程序重启后首次观测），直接沿用，不重新计时。
       // 若持久化值距今已超过上限+余量（说明程序长期没跑、记录过期），则重新计时。
       const saved = this.state.instanceStartAt ? new Date(this.state.instanceStartAt).getTime() : 0;
-      const fresh = saved && !Number.isNaN(saved) && (Date.now() - saved) < (INSTANCE_LIMIT_SEC + 3600) * 1000;
+      const limitSec = this.instanceLimitSec();
+      // 过期阈值 = 上限 + 1小时余量；不限时(0)则用 24 小时兜底，避免永久残留陈旧值
+      const expireMs = (limitSec > 0 ? limitSec + 3600 : 24 * 3600) * 1000;
+      const fresh = saved && !Number.isNaN(saved) && (Date.now() - saved) < expireMs;
       if (fresh) {
         this.log(`[实例] 沿用持久化的开机时间 ${this.state.instanceStartAt}，继续计时`, 'info');
       } else {
@@ -322,6 +324,25 @@ class AccountKeeper {
 
   refreshInstanceRuntime() {
     this.state.instanceRuntimeSec = this.liveInstanceRuntime();
+  }
+
+  // 可配置的上限/预警（分钟→秒）。instanceLimitMin=0 表示不限时、不预警。
+  instanceLimitSec() {
+    const min = Number(this.cfg.instanceLimitMin);
+    if (!Number.isFinite(min) || min < 0) return 60 * 60;  // 非法值 → 默认 60 分钟
+    if (min === 0) return 0;                              // 0 = 不限时，不预警
+    return min * 60;
+  }
+  instanceWarnSec() {
+    const limit = this.instanceLimitSec();
+    if (limit <= 0) return 0;
+    const min = Number(this.cfg.instanceWarnMin);
+    const warn = (Number.isFinite(min) && min > 0 ? min : 50) * 60;
+    return Math.min(warn, limit);  // 预警不超过上限
+  }
+  isInstanceWarn() {
+    if (this.instanceLimitSec() <= 0) return false;  // 不限时不预警
+    return this.liveInstanceRuntime() >= this.instanceWarnSec();
   }
 
   async startInstance() {
@@ -897,7 +918,30 @@ class AccountKeeper {
       const waitSec = this.cfg.mode === 'claim'
         ? Math.max(5, Number(this.cfg.gapSec) || 10)
         : Math.max(60, Number(this.cfg.refreshSec) || 120);
-      await sleep(waitSec * 1000);
+      // 分段等待：每 15 秒快速查一次实例状态，一旦关机立即结束等待进入下一轮触发自愈，
+      // 避免 ticket 模式因 120s 长等待导致关机后迟迟不拉起。claim 模式本就 10s 一轮。
+      await this.sleepWithWatch(waitSec * 1000);
+    }
+  }
+
+  // 分段 sleep：期间定期查实例状态，发现关机(非运行)则提前返回，让主循环尽快自愈。
+  // 不直接调 ensureRunning，避免与主循环并发拉起；只负责"提前结束休眠"。
+  async sleepWithWatch(totalMs) {
+    const STEP = 15000;  // 每 15 秒查一次
+    let waited = 0;
+    while (waited < totalMs && !this.stopped) {
+      const step = Math.min(STEP, totalMs - waited);
+      await sleep(step);
+      waited += step;
+      if (this.stopped) return;
+      try {
+        const list = await this.listInstances();
+        const ins = this.cfg.instanceId ? list.find((x) => x.id === this.cfg.instanceId) : list[0];
+        if (ins && !RUNNING.includes(ins.status)) {
+          this.log(`[快检] 等待期间发现实例已关机(status=${ins.status})，提前进入自愈`, 'warning');
+          return;  // 提前结束等待 → 下一轮 resolveInstance → ensureRunning
+        }
+      } catch (e) { /* 快检失败不影响主循环 */ }
     }
   }
 
@@ -937,13 +981,16 @@ class AccountKeeper {
       runningSec: (this.cfg.enabled && !this.stopped && this.runStartedAt)
         ? Math.max(0, Math.floor((Date.now() - this.runStartedAt) / 1000))
         : 0,
-      // 云电脑实例本次开机运行时长 + 平台 8 小时上限预警
+      // 云电脑实例本次开机运行时长 + 可配置上限预警（默认 60/50 分钟）
       // 实时计算，避免面板 4 秒刷新时数字卡住（resolveInstance 可能 120 秒才跑一次）
       instanceStartAt: this.state.instanceStartAt,
       instanceRuntimeSec: this.liveInstanceRuntime(),
       instanceEstStart: !!this.state.instanceEstStart,
-      instanceLimitSec: INSTANCE_LIMIT_SEC,
-      instanceWarn: !!(this.liveInstanceRuntime() >= INSTANCE_WARN_SEC),
+      instanceLimitSec: this.instanceLimitSec(),
+      instanceWarnSec: this.instanceWarnSec(),
+      instanceWarn: this.isInstanceWarn(),
+      instanceLimitMin: Number(this.cfg.instanceLimitMin) || 0,
+      instanceWarnMin: Number(this.cfg.instanceWarnMin) || 0,
       mode: this.cfg.mode,
       authMode: this.cfg.authMode,
       account: this.cfg.account || '',

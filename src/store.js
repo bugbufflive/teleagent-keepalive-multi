@@ -20,7 +20,7 @@ const { DEFAULT_HEAD, mergeTemplates } = require('./template');
 const ACCOUNT_DEFAULTS = {
   name: '',            // 面板显示名，留空时按账号/实例自动生成
   enabled: false,
-  mode: 'ticket',      // ticket | claim
+  mode: 'claim',       // ticket | claim —— 默认 claim：保持真实连接，避免平台"断开连接1小时休眠"
   authMode: 'cookie',  // cookie | password
   account: '',         // 登录账号
   passwordEnc: '',     // 密码密文
@@ -47,6 +47,10 @@ const ACCOUNT_DEFAULTS = {
   // 云电脑本次开机时间（持久化：程序重启后不归零，接着算运行时长）
   instanceStartAt: '',       // ISO 开机时间；观测到实例 非运行→运行 跳变时记录并写盘
   instanceEstStart: false,   // 开机时间是否估算（程序启动时实例已在运行的情况）
+  // 运行时长上限 / 预警阈值（分钟）——公众版规则"断开1小时休眠"，默认按1小时上限
+  instanceLimitMin: 60,      // 上限分钟数（默认60=1小时；0表示不限时，不预警）
+  instanceWarnMin: 50,       // 预警分钟数（默认50，到点前10分钟提醒）
+  modeV2Migrated: false,     // 模式一次性迁移标记（老账号 ticket→claim，只做一次）
   checkin: { lastDate: '', streak: 0, lastAt: '' }
 };
 
@@ -124,10 +128,13 @@ class Store {
     }
 
     // 检测原始配置里是否存在待升级的旧默认值（用 raw 判断，避免新账号被误标脏）
-    const needKeepaliveMigrate = (Array.isArray(raw.accounts) ? raw.accounts : [])
+    const rawAccounts = Array.isArray(raw.accounts) ? raw.accounts : [];
+    const needKeepaliveMigrate = rawAccounts
       .some((a) => Object.entries(KEEPALIVE_UPGRADE).some(([k, { from }]) => a[k] === from));
+    // 模式迁移：存在未打标记且 mode=ticket 的老账号，需要落盘
+    const needModeMigrate = rawAccounts.some((a) => !a.modeV2Migrated && a.mode === 'ticket');
 
-    let dirty = this.migrated || needKeepaliveMigrate;
+    let dirty = this.migrated || needKeepaliveMigrate || needModeMigrate;
     for (const a of this.data.accounts) {
       if (!a.deviceCode) { a.deviceCode = newDeviceCode(); dirty = true; }
       if (!a.id) { a.id = newId(); dirty = true; }
@@ -146,6 +153,12 @@ class Store {
     // 迁移老账号：仍是旧默认值的保活参数升级到长保活值；用户自定义值不动
     for (const [key, { from, to }] of Object.entries(KEEPALIVE_UPGRADE)) {
       if (acc[key] === from) acc[key] = to;
+    }
+    // 模式一次性迁移：公众版"断开连接1小时休眠"，老账号若是 ticket 升级为 claim。
+    // 用 modeV2Migrated 标记只做一次；用户之后手动改回 ticket 不再被覆盖。
+    if (!a.modeV2Migrated) {
+      if (acc.mode === 'ticket') acc.mode = 'claim';
+      acc.modeV2Migrated = true;
     }
     if (!acc.deviceCode) acc.deviceCode = newDeviceCode();
     return acc;
