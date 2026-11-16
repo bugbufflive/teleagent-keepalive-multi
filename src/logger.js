@@ -9,6 +9,7 @@ const path = require('path');
 
 const MAX = Math.max(50, Number(process.env.LOG_MAX) || 500);
 const FILE_MAX = (Number(process.env.LOG_FILE_MAX_MB) || 5) * 1024 * 1024;
+const KEEP_DAYS = Math.max(1, Number(process.env.LOG_KEEP_DAYS) || 30);  // 日志保留天数
 const buf = [];
 
 function ts() {
@@ -25,6 +26,19 @@ function rotate(file) {
   } catch (e) { /* 文件不存在或轮转失败忽略 */ }
 }
 
+// 清理超过保留期的历史日志，避免长期运行把磁盘堆满（7×24 场景）
+function cleanup(dir) {
+  try {
+    const cutoff = new Date(Date.now() + 8 * 3600 * 1000 - KEEP_DAYS * 86400 * 1000)
+      .toISOString().slice(0, 10);
+    for (const name of fs.readdirSync(dir)) {
+      const m = name.match(/^(\d{4}-\d{2}-\d{2})\.log(\.\d+)?$/);
+      if (m && m[1] < cutoff) fs.unlinkSync(path.join(dir, name));
+    }
+  } catch (e) { /* 清理失败不影响运行 */ }
+}
+
+let lastCleanup = 0;
 function write(line, level = 'info', dataDir, meta = {}) {
   const item = { t: Date.now(), time: ts(), level, msg: line, acct: meta.acct || '', acctId: meta.acctId || '' };
   buf.push(item);
@@ -34,6 +48,8 @@ function write(line, level = 'info', dataDir, meta = {}) {
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${bjDay()}.log`);
     rotate(file);
+    // 每小时清理一次过期日志
+    if (Date.now() - lastCleanup > 3600 * 1000) { lastCleanup = Date.now(); cleanup(dir); }
     const tag = item.acct ? ` [${item.acct}]` : '';
     fs.appendFileSync(file, `[${item.time}] [${level}]${tag} ${line}\n`);
   } catch (e) { /* 落盘失败不影响运行 */ }

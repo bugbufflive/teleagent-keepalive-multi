@@ -38,3 +38,15 @@ function shutdown(sig) {
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// 长期无人值守的兜底：Node 15+ 默认会因未处理的 Promise rejection 直接结束进程，
+// 这里统一接管，避免一次偶发异常就让整个保活停摆。
+process.on('unhandledRejection', (err) => {
+  logger.write(`未处理的 Promise 异常（已忽略，不影响保活）：${err && err.message ? err.message : String(err)}`, 'error', DATA_DIR);
+});
+process.on('uncaughtException', (err) => {
+  logger.write(`未捕获异常：${err && err.stack ? err.stack : String(err)}`, 'error', DATA_DIR);
+  // 进程状态可能已不可靠，记录后退出，交给 Docker 的 restart 策略拉起
+  manager.stopAll();
+  setTimeout(() => process.exit(1), 1000);
+});

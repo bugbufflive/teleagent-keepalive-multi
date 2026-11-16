@@ -949,7 +949,7 @@ class AccountKeeper {
     if (!this.stopped) return this.status();
     this.stopped = false;
     this.runStartedAt = Date.now();   // 每次启动（含 restart）重置计时
-    this.loop().catch((e) => this.log(`主循环异常退出: ${e.message}`, 'error'));
+    this.supervise();
     const on = this.cfg.enabled && this.cfg.cookie;
     this.log(on ? `保活已启动（模式：${this.cfg.mode}）` : '保活已加载（未启用 / 未填 Cookie）', on ? 'success' : 'info');
     return this.status();
@@ -957,6 +957,7 @@ class AccountKeeper {
 
   stop() {
     this.stopped = true;
+    if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
     try { if (this.ws) this.ws.close(); } catch (e) { /* ignore */ }
     this.state.phase = 'disabled';
   }
@@ -965,6 +966,29 @@ class AccountKeeper {
     this.stop();
     setTimeout(() => this.start(), 500);
     return this.status();
+  }
+
+  // 守护主循环：任何未捕获异常导致 loop() 退出时，自动退避重启，
+  // 保证无人值守长期运行（7×24）不因一次异常就永久停摆。
+  supervise() {
+    if (this.stopped) return;
+    this.loop().then(
+      () => { if (!this.stopped) this.retryLoop('主循环意外结束'); },
+      (e) => { this.log(`主循环异常退出: ${e.message}`, 'error'); this.retryLoop(`主循环异常: ${e.message}`); }
+    );
+  }
+
+  retryLoop(reason) {
+    if (this.stopped) return;
+    this._retryCount = (this._retryCount || 0) + 1;
+    const wait = Math.min(60000, 5000 * this._retryCount);   // 5s → 10s → 15s … 最长 60s
+    this.log(`[守护] ${reason}，${Math.round(wait / 1000)} 秒后自动重启保活循环`, 'warning');
+    this._retryTimer = setTimeout(() => {
+      this._retryTimer = null;
+      this._retryCount = 0;
+      this.supervise();
+    }, wait);
+    if (this._retryTimer.unref) this._retryTimer.unref();
   }
 
   status() {
