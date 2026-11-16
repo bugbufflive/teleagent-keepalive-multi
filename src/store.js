@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { DEFAULT_HEAD, mergeTemplates } = require('./template');
 
 const ACCOUNT_DEFAULTS = {
   name: '',            // 面板显示名，留空时按账号/实例自动生成
@@ -49,7 +50,9 @@ const NOTIFY_DEFAULTS = {
   channel: 'wecom',
   wecomWebhook: '',
   cooldownMin: 30,
-  notifyRecover: true
+  notifyRecover: true,
+  headTemplate: DEFAULT_HEAD,   // 消息标题前缀模板
+  templates: {}                 // 用户自定义的通知模板（id -> {title, body}）
 };
 
 function newId() {
@@ -168,13 +171,47 @@ class Store {
   }
 
   notify() {
-    return { ...NOTIFY_DEFAULTS, ...(this.data.notify || {}) };
+    const raw = { ...NOTIFY_DEFAULTS, ...(this.data.notify || {}) };
+    // templates 存的是「用户改过的部分」，读出来时和默认值合并
+    raw.templates = mergeTemplates(raw.templates);
+    return raw;
+  }
+
+  /** 原始（未合并默认值的）通知配置，保存时用它做基底 */
+  rawNotify() {
+    return { ...(this.data.notify || {}) };
   }
 
   setNotify(patch = {}) {
-    this.data.notify = { ...this.notify(), ...patch };
+    const cur = this.rawNotify();
+    // templates 只存用户改过的部分，避免把默认值也写回磁盘
+    const next = { ...cur, ...patch };
+    if (!next.templates || !Object.keys(next.templates).length) delete next.templates;
+    this.data.notify = next;
     this.save();
-    return this.data.notify;
+    return this.notify();
+  }
+
+  /** 保存单个事件的模板；传 null 表示恢复默认 */
+  setTemplate(id, tpl) {
+    const cur = this.rawNotify();
+    const templates = { ...(cur.templates || {}) };
+    if (tpl === null) delete templates[id];
+    else templates[id] = { title: tpl.title, body: tpl.body };
+    cur.templates = templates;
+    this.data.notify = cur;
+    this.save();
+    return this.notify();
+  }
+
+  /** 全部恢复默认 */
+  resetTemplates() {
+    const cur = this.rawNotify();
+    delete cur.templates;
+    cur.headTemplate = DEFAULT_HEAD;
+    this.data.notify = cur;
+    this.save();
+    return this.notify();
   }
 }
 

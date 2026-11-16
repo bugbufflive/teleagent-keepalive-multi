@@ -26,7 +26,7 @@ PASSWORD=""
 WEBUSER="admin"
 INSTALL_DOCKER=1
 USE_COMPOSE=1
-VERSION="2026-11-15-v4"
+VERSION="2026-11-16-v5"
 
 while [ $# -gt 0 ]; do
   case "$1" in

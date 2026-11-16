@@ -165,6 +165,7 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, monospace; font-s
   border: 1px solid var(--line); border-radius: 14px; padding: 18px;
   max-height: 88vh; overflow: auto;
 }
+.modal-box.wide { max-width: 940px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .modal-head h2 { font-size: 15px; }
 .x { background: transparent; border: 0; color: var(--muted); font-size: 22px; cursor: pointer; line-height: 1; }
@@ -178,10 +179,53 @@ textarea { resize: vertical; font-family: ui-monospace, Menlo, monospace; font-s
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* ---------- 通知模板管理 ---------- */
+.tpl-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 16px; margin-top: 10px; }
+.tpl-side { min-width: 0; }
+.tpl-side-label { margin-top: 0; }
+.tpl-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; max-height: 46vh; overflow: auto; }
+.tpl-item {
+  border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
+  background: #0f1630; cursor: pointer; transition: .15s;
+}
+.tpl-item:hover { border-color: #3c4a75; }
+.tpl-item.active { border-color: var(--brand); background: linear-gradient(180deg, #16213f, #121a33); }
+.tpl-item-top { display: flex; align-items: center; gap: 6px; }
+.tpl-item-top b { font-size: 13px; font-weight: 600; flex: 1; }
+.tpl-item-sub { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
+.tpl-dot { color: var(--warn); font-size: 11px; }
+
+.tpl-editor { min-width: 0; }
+.tpl-editor h3 { margin: 0 0 2px; font-size: 14px; color: #cfd8ee; }
+
+.var-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  font-size: 11.5px; padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  background: #0d142a; color: #9fb0d0; border: 1px solid var(--line); font-family: inherit;
+}
+.chip:hover { border-color: var(--brand); color: var(--text); }
+
+.tpl-preview-box { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.tpl-preview-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 6px 10px; background: #0d142a; border-bottom: 1px solid var(--line);
+  font-size: 11.5px; color: var(--muted);
+}
+.tpl-preview-head .hint { margin: 0; }
+.tpl-preview {
+  margin: 0; padding: 10px 12px; background: #070b17; max-height: 180px; overflow: auto;
+  font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all;
+  color: #cfe0ff;
+}
+
+.btn.sm { padding: 5px 10px; font-size: 12px; }
+
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; padding: 14px; }
   .side { position: static; }
   .acc-list { max-height: 260px; }
   .grid2 { grid-template-columns: 1fr; }
   .row.nowrap { flex-wrap: wrap; }
+  .tpl-layout { grid-template-columns: 1fr; }
+  .tpl-list { max-height: 200px; }
 }

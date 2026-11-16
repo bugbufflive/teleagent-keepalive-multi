@@ -162,9 +162,56 @@
       <div class="row">
         <button class="btn primary" id="saveNotify">保存</button>
         <button class="btn" id="testNotify">发测试消息</button>
+        <button class="btn" id="openTemplates">模板管理</button>
         <button class="btn" data-close="modalNotify">关闭</button>
       </div>
-      <p class="hint">会推送：账号掉线、云电脑掉线/自动拉起、登录态快过期。推送标题带账号名。</p>
+      <p class="hint">会推送：账号掉线、云电脑掉线/自动拉起、登录态快过期。推送标题带账号名。文案内容可在「模板管理」里改。</p>
+    </div>
+  </div>
+
+  <!-- 通知模板管理 -->
+  <div class="modal hidden" id="modalTpl">
+    <div class="modal-box wide">
+      <div class="modal-head">
+        <h2>通知模板管理</h2>
+        <button class="x" data-close="modalTpl">×</button>
+      </div>
+      <div class="tpl-layout">
+        <div class="tpl-side">
+          <label class="tpl-side-label">标题前缀</label>
+          <input id="tplHead" placeholder="【TeleAgent保活·{{账号}}】" />
+          <p class="hint" id="tplHeadHint"></p>
+          <div id="tplList" class="tpl-list"></div>
+          <button class="btn sm" id="tplResetAll" style="width:100%">全部恢复默认</button>
+        </div>
+        <div class="tpl-editor">
+          <div id="tplEmpty" class="empty">左边选一个事件来编辑。</div>
+          <div id="tplBody" class="hidden">
+            <h3 id="tplLabel">—</h3>
+            <p class="hint" id="tplDesc"></p>
+            <label>标题模板<input id="tplTitle" placeholder="支持 {{变量}}" /></label>
+            <label>正文模板<textarea id="tplContent" rows="7" placeholder="支持 {{变量}}"></textarea></label>
+            <div class="row" style="margin-top:8px">
+              <span class="inline">插入变量：</span>
+              <span id="tplVars" class="var-chips"></span>
+            </div>
+            <div class="tpl-preview-box">
+              <div class="tpl-preview-head">
+                <span>预览</span>
+                <span id="tplUnknown" class="hint"></span>
+              </div>
+              <pre id="tplPreview" class="tpl-preview"></pre>
+            </div>
+            <div class="row">
+              <button class="btn primary" id="tplSave">保存这条</button>
+              <button class="btn" id="tplReset">恢复默认</button>
+              <button class="btn" id="tplTest">发测试消息</button>
+              <button class="btn" data-close="modalTpl">关闭</button>
+            </div>
+            <p class="hint" id="tplHint"></p>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

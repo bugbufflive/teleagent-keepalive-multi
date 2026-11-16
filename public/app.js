@@ -21,7 +21,7 @@ const PHASE_TEXT = {
 const PHASE_CLASS = { online: 'ok', error: 'err', paused: 'warn', connecting: 'warn', nologin: 'warn' };
 const STATUS_TEXT = { 3: '已关机', 4: '运行中', 5: '排队中', 100: '运行中' };
 
-const S = { accounts: [], notify: {}, selectedId: localStorage.getItem('ta.selected') || '', accSig: '' };
+const S = { accounts: [], notify: {}, selectedId: localStorage.getItem('ta.selected') || '', accSig: '', tpl: { events: [], headTemplate: '' }, tplId: '' };
 
 let toastTimer = null;
 function toast(msg, bad) {
@@ -490,6 +490,188 @@ $('testNotify').addEventListener('click', async () => {
 $('logFilter').addEventListener('change', () => { lastLogSig = ''; refreshLogs(); });
 $('logLimit').addEventListener('change', () => { lastLogSig = ''; refreshLogs(); });
 $('logAccount').addEventListener('change', () => { lastLogSig = ''; refreshLogs(); });
+
+// ---------------- 通知模板管理 ----------------
+
+const tplEvent = (id) => (S.tpl.events || []).find((e) => e.id === id) || null;
+
+function renderTplList() {
+  const box = $('tplList');
+  if (!S.tpl.events.length) {
+    box.innerHTML = '<p class="empty">加载中…</p>';
+    return;
+  }
+  box.innerHTML = S.tpl.events.map((e) => {
+    const active = e.id === S.tplId ? ' active' : '';
+    const modified = e.current.title !== e.defaults.title || e.current.body !== e.defaults.body;
+    return `
+      <div class="tpl-item${active}" data-id="${esc(e.id)}">
+        <div class="tpl-item-top">
+          <b>${esc(e.label)}</b>
+          ${modified ? '<span class="tpl-dot" title="已自定义">●</span>' : ''}
+        </div>
+        <div class="tpl-item-sub">${esc(e.desc)}</div>
+      </div>`;
+  }).join('');
+}
+
+function renderTplVars(ev) {
+  $('tplVars').innerHTML = (ev.vars || [])
+    .map((v) => `<button class="chip" data-var="${esc(v)}">{{${esc(v)}}}</button>`)
+    .join('');
+}
+
+async function loadTemplates() {
+  const r = await api('/api/notify/templates');
+  S.tpl = r.data || { events: [], headTemplate: '' };
+  $('tplHead').value = S.tpl.headTemplate || '';
+  renderTplList();
+  if (!S.tplId && S.tpl.events.length) S.tplId = S.tpl.events[0].id;
+  selectTpl(S.tplId);
+}
+
+/** 选中的事件写进编辑器 */
+function selectTpl(id) {
+  const ev = tplEvent(id);
+  S.tplId = id;
+  renderTplList();
+  if (!ev) {
+    $('tplEmpty').classList.remove('hidden');
+    $('tplBody').classList.add('hidden');
+    return;
+  }
+  $('tplEmpty').classList.add('hidden');
+  $('tplBody').classList.remove('hidden');
+  $('tplLabel').textContent = ev.label;
+  $('tplDesc').textContent = ev.desc;
+  $('tplTitle').value = ev.current.title;
+  $('tplContent').value = ev.current.body;
+  renderTplVars(ev);
+  updateTplPreview();
+}
+
+/** 本地渲染预览：不请求后端，敲字即时出效果 */
+function renderLocal(text, vars) {
+  return String(text || '').replace(/\{\{\s*([^}]+?)\s*\}\}/g, (m, name) => {
+    const k = String(name).trim();
+    return Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k] == null ? '' : vars[k]) : '';
+  });
+}
+
+/** 前缀和标题的拼接规则要和后端一致 */
+function composeLocal(head, title) {
+  const h = String(head || '').trim();
+  const t = String(title || '');
+  if (!h) return t;
+  if (!t) return h;
+  return /[】\]）)>\*#]$/.test(h) ? `${h}${t}` : `${h}\n${t}`;
+}
+
+let tplPreviewTimer = null;
+function updateTplPreview() {
+  const ev = tplEvent(S.tplId);
+  if (!ev) return;
+  const vars = ev.sample || {};
+  const title = renderLocal($('tplTitle').value, vars);
+  const body = renderLocal($('tplContent').value, vars);
+  const head = renderLocal($('tplHead').value || S.tpl.headTemplate, vars);
+  $('tplPreview').textContent = `${composeLocal(head, title)}\n${body}`;
+  // 找出模板里用到但该事件不支持的变量
+  const used = [...new Set([...String($('tplTitle').value).matchAll(/\{\{\s*([^}]+?)\s*\}\}/g),
+    ...String($('tplContent').value).matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => m[1].trim()))];
+  const bad = used.filter((v) => !(ev.vars || []).includes(v));
+  $('tplUnknown').textContent = bad.length ? `未知变量：${bad.join('、')}` : '';
+  $('tplUnknown').style.color = bad.length ? 'var(--warn)' : '';
+}
+
+$('tplTitle').addEventListener('input', updateTplPreview);
+$('tplContent').addEventListener('input', updateTplPreview);
+$('tplHead').addEventListener('input', updateTplPreview);
+
+$('tplVars').addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-var]');
+  if (!chip) return;
+  const token = chip.dataset.var;
+  const ta = $('tplContent');
+  const start = ta.selectionStart == null ? ta.value.length : ta.selectionStart;
+  const end = ta.selectionEnd == null ? ta.value.length : ta.selectionEnd;
+  ta.value = ta.value.slice(0, start) + `{{${token}}}` + ta.value.slice(end);
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = start + token.length + 4;
+  updateTplPreview();
+});
+
+$('tplList').addEventListener('click', (e) => {
+  const item = e.target.closest('.tpl-item');
+  if (item) selectTpl(item.dataset.id);
+});
+
+$('openTemplates').addEventListener('click', async () => {
+  closeModal('modalNotify');
+  openModal('modalTpl');
+  try {
+    await loadTemplates();
+  } catch (err) {
+    toast('模板加载失败：' + err.message, true);
+  }
+});
+
+$('tplSave').addEventListener('click', async () => {
+  const ev = tplEvent(S.tplId);
+  if (!ev) return;
+  try {
+    await post('/api/notify/templates', {
+      id: ev.id,
+      title: $('tplTitle').value,
+      body: $('tplContent').value
+    });
+    toast(`「${ev.label}」模板已保存`);
+    await loadTemplates();
+    selectTpl(ev.id);
+    refreshState();
+  } catch (e) { toast(e.message, true); }
+});
+
+$('tplReset').addEventListener('click', async () => {
+  const ev = tplEvent(S.tplId);
+  if (!ev) return;
+  if (!confirm(`把「${ev.label}」恢复成默认模板？`)) return;
+  try {
+    await post('/api/notify/templates', { id: ev.id, title: ev.defaults.title, body: ev.defaults.body });
+    toast('已恢复默认');
+    await loadTemplates();
+    selectTpl(ev.id);
+    refreshState();
+  } catch (e) { toast(e.message, true); }
+});
+
+$('tplResetAll').addEventListener('click', async () => {
+  if (!confirm('把所有通知模板和标题前缀都恢复成默认？')) return;
+  try {
+    await post('/api/notify/templates/reset', {});
+    toast('已全部恢复默认');
+    await loadTemplates();
+    refreshState();
+  } catch (e) { toast(e.message, true); }
+});
+
+$('tplTest').addEventListener('click', async () => {
+  const ev = tplEvent(S.tplId);
+  if (!ev) return;
+  try {
+    await post('/api/notify/templates/test', { id: ev.id });
+    toast('测试消息已发送');
+  } catch (e) { toast('推送失败：' + e.message, true); }
+});
+
+// 标题前缀单独保存（和模板正文分开）
+$('tplHead').addEventListener('change', async () => {
+  try {
+    await post('/api/notify/templates', { headTemplate: $('tplHead').value.trim() });
+    toast('标题前缀已保存');
+    await loadTemplates();
+  } catch (e) { toast(e.message, true); }
+});
 
 refreshState();
 refreshLogs();

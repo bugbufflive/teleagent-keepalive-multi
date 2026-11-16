@@ -15,6 +15,11 @@
  *   POST /api/accounts/:id/delete       删除账号
  *   POST /api/notify                    全局通知配置
  *   POST /api/notify/test               发测试消息（可带 account 用该账号的机器人）
+ *   GET  /api/notify/templates          模板目录（事件、变量、默认值、当前值）
+ *   POST /api/notify/templates          保存模板 {id, title, body} / {headTemplate}
+ *   POST /api/notify/templates/reset    全部恢复默认
+ *   POST /api/notify/templates/preview  预览渲染结果 {id, title, body, vars}
+ *   POST /api/notify/templates/test     按模板发一条测试消息 {id}
  *
  * 若设置了环境变量 WEB_PASSWORD，则整站走 HTTP Basic 认证。
  */
@@ -22,6 +27,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { EVENT_MAP, EVENTS, DEFAULT_HEAD, render, renderHead, compose, catalog } = require('./template');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
@@ -258,6 +264,96 @@ function createServer({ manager, store, logger, dataDir }) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ msgtype: 'text', text: { content: text } }),
+            signal: AbortSignal.timeout(10000)
+          });
+          const j = await r.json().catch(() => ({}));
+          if (j.errcode === 0) return sendJson(res, { success: true });
+          return sendJson(res, { error: `errcode=${j.errcode} ${j.errmsg || ''}` }, 400);
+        } catch (e) {
+          return sendJson(res, { error: e.message }, 400);
+        }
+      }
+
+      // ---------- 通知模板 ----------
+      if (req.method === 'GET' && pathname === '/api/notify/templates') {
+        return sendJson(res, { success: true, data: catalog(store.notify().templates) });
+      }
+
+      if (req.method === 'POST' && pathname === '/api/notify/templates') {
+        const body = await readBody(req);
+        // 只改标题前缀
+        if (typeof body.headTemplate === 'string') {
+          const head = body.headTemplate.trim();
+          store.setNotify({ headTemplate: head || DEFAULT_HEAD });
+          logger.write('通知标题前缀已更新', 'info', dataDir);
+          return sendJson(res, { success: true, data: store.notify() });
+        }
+        const id = String(body.id || '');
+        if (!EVENT_MAP[id]) return sendJson(res, { error: '未知的事件 id' }, 400);
+        const title = String(body.title == null ? '' : body.title);
+        const bodyText = String(body.body == null ? '' : body.body);
+        if (!title.trim() || !bodyText.trim()) {
+          return sendJson(res, { error: '标题和正文都不能为空（想恢复默认请用「恢复默认」）' }, 400);
+        }
+        if (title.length > 200 || bodyText.length > 4000) {
+          return sendJson(res, { error: '标题或正文太长' }, 400);
+        }
+        store.setTemplate(id, { title, body: bodyText });
+        logger.write(`通知模板已更新：${EVENT_MAP[id].label}`, 'info', dataDir);
+        return sendJson(res, { success: true, data: store.notify() });
+      }
+
+      if (req.method === 'POST' && pathname === '/api/notify/templates/reset') {
+        store.resetTemplates();
+        logger.write('通知模板已全部恢复默认', 'info', dataDir);
+        return sendJson(res, { success: true, data: store.notify() });
+      }
+
+      // 预览：不落盘，实时看渲染成什么样
+      if (req.method === 'POST' && pathname === '/api/notify/templates/preview') {
+        const body = await readBody(req);
+        const id = String(body.id || '');
+        const def = EVENT_MAP[id];
+        if (!def) return sendJson(res, { error: '未知的事件 id' }, 400);
+        const tpl = (body.title != null || body.body != null)
+          ? {
+            title: body.title == null ? def.title : String(body.title),
+            body: body.body == null ? def.body : String(body.body)
+          }
+          : store.notify().templates[id];
+        const vars = { ...def.sample, ...(body.vars && typeof body.vars === 'object' ? body.vars : {}) };
+        const t = render(tpl.title, vars);
+        const b = render(tpl.body, vars);
+        const head = renderHead(body.headTemplate, { 账号: vars.账号 || '' });
+        return sendJson(res, {
+          success: true,
+          data: {
+            title: t.text,
+            content: b.text,
+            full: `${compose(head, t.text)}\n${b.text}`,
+            unknown: [...new Set([...t.unknown, ...b.unknown])]
+          }
+        });
+      }
+
+      // 按模板发一条真实测试消息
+      if (req.method === 'POST' && pathname === '/api/notify/templates/test') {
+        const body = await readBody(req);
+        const id = String(body.id || '');
+        const def = EVENT_MAP[id];
+        if (!def) return sendJson(res, { error: '未知的事件 id' }, 400);
+        const tpl = store.notify().templates[id];
+        const vars = { ...def.sample, ...(body.vars && typeof body.vars === 'object' ? body.vars : {}) };
+        const title = render(tpl.title, vars).text;
+        const content = render(tpl.body, vars).text;
+        const hook = store.notify().wecomWebhook;
+        if (!hook) return sendJson(res, { error: '还没有配置机器人 webhook' }, 400);
+        const head = renderHead(store.notify().headTemplate, { 账号: vars.账号 || '' });
+        try {
+          const r = await fetch(hook, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ msgtype: 'text', text: { content: `${compose(head, title)}\n${content}` } }),
             signal: AbortSignal.timeout(10000)
           });
           const j = await r.json().catch(() => ({}));

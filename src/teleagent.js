@@ -135,7 +135,11 @@ class AccountKeeper {
     this.parseIdentity();
     this.resetPointsState();
     const until = r.expiresAt ? new Date(r.expiresAt).toLocaleString('zh-CN') : '未知';
-    this.notifier.event('relogin', '账号已自动重新登录', `账号：${account}\n新登录态到期：${until}`, 5);
+    this.notifier.event('relogin', {
+      账号: account,
+      到期: until,
+      时间: new Date().toLocaleString('zh-CN')
+    }, 5);
     return r;
   }
 
@@ -425,9 +429,13 @@ class AccountKeeper {
     }
     this.log(`[积分] ${trigger}领取成功${gained ? ` +${gained}` : ''}，剩余 ${this.state.points == null ? '未知' : this.state.points}，本期已领 ${this.state.pointsDays} 天 / ${this.state.pointsTotal} 分`, 'success');
     if (trigger !== '手动') {
-      this.notifier.event('points', '积分已自动领取',
-        `账号：${this.cfg.account || this.cfg.name}\n本次：${gained ? '+' + gained : '已完成'}\n剩余：${this.state.points == null ? '未知' : this.state.points}\n本期累计：${this.state.pointsDays} 天 / ${this.state.pointsTotal} 分`,
-        720);
+      this.notifier.event('points', {
+        账号: this.cfg.account || this.cfg.name,
+        本次: gained ? '+' + gained : '已完成',
+        剩余: this.state.points == null ? '未知' : this.state.points,
+        累计: `${this.state.pointsDays} 天 / ${this.state.pointsTotal} 分`,
+        时间: new Date().toLocaleString('zh-CN')
+      }, 720);
     }
     return { already: false, gained, balance: this.state.points, days: this.state.pointsDays, total: this.state.pointsTotal };
   }
@@ -460,9 +468,13 @@ class AccountKeeper {
     this.state.desktopDown = true;
     this.state.lastDownAt = new Date().toISOString();
     this.log(`[实例] 当前状态 ${st}（${STATUS_TEXT[st] || '非运行'}），距上次换票 ${gap === null ? '未知' : gap + 's'}，调用 start 拉起…`, 'warning');
-    this.notifier.event('desktop', '云电脑掉线，正在自动拉起',
-      `实例：${id}\n状态：${STATUS_TEXT[st] || `状态 ${st}`}\n距上次换票：${gap === null ? '未知' : gap + ' 秒'}\n时间：${new Date().toLocaleString('zh-CN')}`,
-      Number(this.notifyCfg().cooldownMin) || 30);
+    this.notifier.event('desktop', {
+      账号: this.cfg.name || this.cfg.account || '',
+      实例: id,
+      状态: STATUS_TEXT[st] || `状态 ${st}`,
+      距上次换票: gap === null ? '未知' : gap + ' 秒',
+      时间: new Date().toLocaleString('zh-CN')
+    }, Number(this.notifyCfg().cooldownMin) || 30);
     let ok = false;
     for (let i = 0; i < 3 && !ok; i++) {
       try {
@@ -474,11 +486,19 @@ class AccountKeeper {
       if (!ok) await sleep(5000);
     }
     if (!ok) {
-      this.notifier.event('desktop-fail', '云电脑拉起失败', `实例：${id}\n多轮 start 后仍未回到运行中`, 60);
+      this.notifier.event('desktop-fail', {
+        账号: this.cfg.name || this.cfg.account || '',
+        实例: id,
+        时间: new Date().toLocaleString('zh-CN')
+      }, 60);
       throw new Error('实例拉起超时（未回到 100/4）');
     }
     if (this.notifyCfg().notifyRecover !== false) {
-      await this.notifier.event('desktop-ok', '云电脑已自动拉起', `实例：${id}\n时间：${new Date().toLocaleString('zh-CN')}`, 1);
+      await this.notifier.event('desktop-ok', {
+        账号: this.cfg.name || this.cfg.account || '',
+        实例: id,
+        时间: new Date().toLocaleString('zh-CN')
+      }, 1);
     }
     this.state.desktopDown = false;
   }
@@ -641,7 +661,11 @@ class AccountKeeper {
         this.state.lastError = `自动登录失败: ${e.message}`;
         this.state.lastLoginOk = false;
         this.log(`[登录] 自动登录失败：${e.message}`, 'error');
-        this.notifier.event('login-fail', '账号自动登录失败', `账号：${this.cfg.account}\n原因：${e.message}\n请到控制台检查账号或密码`, 60);
+        this.notifier.event('login-fail', {
+          账号: this.cfg.account,
+          原因: e.message,
+          时间: new Date().toLocaleString('zh-CN')
+        }, 60);
       }
       if (!this.cfg.cookie) {
         this.state.phase = 'nologin';
@@ -659,7 +683,11 @@ class AccountKeeper {
         if (this.state.cookieDaysLeft !== null && this.state.cookieDaysLeft <= Number(this.cfg.cookieAlertDays || 3)) {
           this.log(`⚠️ 登录态剩余 ${this.state.cookieDaysLeft} 天，${this.cfg.authMode === 'password' ? '将自动重新登录' : '请重新抓取 Cookie'}`, 'warning');
           if (this.cfg.authMode !== 'password') {
-            this.notifier.event('cookie-expire', 'Cookie 即将过期', `剩余 ${this.state.cookieDaysLeft} 天\n请到控制台更新 Cookie`, 720);
+            this.notifier.event('cookie-expire', {
+              账号: this.cfg.name || this.cfg.account || '',
+              剩余天数: this.state.cookieDaysLeft,
+              时间: new Date().toLocaleString('zh-CN')
+            }, 720);
           }
         }
       } catch (e) {
@@ -668,9 +696,12 @@ class AccountKeeper {
         this.log(`[错误] ${e.message}`, 'error');
         if (this.isAuthError(e.message)) {
           this.state.accountDead = true;
-          this.notifier.event('account', '账号登录态已失效',
-            `原因：${e.message}\n处理：${this.cfg.authMode === 'password' ? '正在自动重新登录' : '请到控制台更新 Cookie'}`,
-            Number(this.notifyCfg().cooldownMin) || 30);
+          this.notifier.event('account', {
+            账号: this.cfg.name || this.cfg.account || '',
+            原因: e.message,
+            处理: this.cfg.authMode === 'password' ? '正在自动重新登录' : '请到控制台更新 Cookie',
+            时间: new Date().toLocaleString('zh-CN')
+          }, Number(this.notifyCfg().cooldownMin) || 30);
           if (this.cfg.authMode === 'password' && this.cfg.autoRelogin && this.cfg.account && this.cfg.passwordEnc) {
             try {
               await this.doLogin('登录态失效，立即重登');

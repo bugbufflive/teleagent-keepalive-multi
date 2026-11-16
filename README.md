@@ -213,6 +213,44 @@ compose 那份 `docker-compose.yml` 多做了两件事，用 `docker run` 时要
 | POST | `/api/accounts/<id>/delete` | 删除账号 |
 | POST | `/api/notify` | 全局通知配置 |
 | POST | `/api/notify/test` | 发测试消息（可带 `account` 指定用哪个机器人） |
+| GET | `/api/notify/templates` | 通知模板目录（事件、可用变量、默认值、当前值） |
+| POST | `/api/notify/templates` | 保存模板 `{id, title, body}`，或只改前缀 `{headTemplate}` |
+| POST | `/api/notify/templates/reset` | 所有模板恢复默认 |
+| POST | `/api/notify/templates/preview` | 预览渲染结果 `{id, title?, body?, vars?}` |
+| POST | `/api/notify/templates/test` | 按模板发一条真实测试消息 `{id}` |
+
+## 通知模板：文案可以自己改
+
+推送内容不再写死在代码里，面板右上角「通知设置 → 模板管理」里可以逐条编辑，改完立刻生效。
+
+**怎么用**
+
+1. 点「通知设置」→「模板管理」
+2. 左边选一个事件，右边改「标题模板」和「正文模板」
+3. 正文里用 `{{变量}}` 占位，点下面的变量按钮直接插入
+4. 下方「预览」实时显示最终发出去的样子
+5. 点「保存这条」落盘；要退回默认就点「恢复默认」
+
+模板存在 `data/config.json` 的 `notify.templates` 里，只存你改过的那几条，其余走内置默认值。
+
+**标题前缀**
+
+左边「标题前缀」默认是 `【TeleAgent保活·{{账号}}】`，多账号时自动带上是哪个账号出的事。也可以改成任意文字，比如 `[{{账号}}] 保活告警`。
+
+**有哪些事件和变量**
+
+| 事件 | 什么时候触发 | 可用变量 |
+|---|---|---|
+| `desktop` | 云电脑掉线，正在自动拉起 | 账号、实例、状态、距上次换票、时间 |
+| `desktop-fail` | 多轮 start 后仍未回到运行中 | 账号、实例、时间 |
+| `desktop-ok` | 掉线之后又拉起来了 | 账号、实例、时间 |
+| `account` | 登录态失效，账号掉线 | 账号、原因、处理、时间 |
+| `login-fail` | 账号密码自动续期失败 | 账号、原因、时间 |
+| `cookie-expire` | Cookie 快过期 | 账号、剩余天数、时间 |
+| `relogin` | 自动重新登录成功 | 账号、到期、时间 |
+| `points` | 每日积分自动领取成功 | 账号、本次、剩余、累计、时间 |
+
+模板里写了该事件不支持的变量时，编辑页会标黄提示「未知变量」，发送时该变量替换成空串。
 
 ## 积分：自动领取 + 剩余显示
 
