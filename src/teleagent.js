@@ -382,15 +382,20 @@ class AccountKeeper {
     const localRun = this.liveInstanceRuntime();
     const komariRun = Math.max(0, Math.floor((Date.now() - bootMs) / 1000));
 
-    // Komari 显示的开机更早（或本地没记录）→ 采用 Komari
-    const needUpdate = !localStart || komariRun < localRun - 30;
+    // 只要与本地记录相差超过 60 秒，就以探针为准（探针读的是真实系统 uptime）。
+    // 本地记录来源：①程序重启时实例已在运行 → 用当前时间估算（偏晚，运行时长偏短）
+    //                ②状态跳变推断 → 可能因平台频繁关机而失真
+    // 两种情况探针都更准，所以不做方向判断，直接覆盖。
+    const diff = Math.abs(komariRun - localRun);
+    const needUpdate = !localStart || diff > 60;
     if (needUpdate) {
       this.state.instanceStartAt = k.bootAt.toISOString();
       this.state.instanceEstStart = false;   // 来自探针，不是估算
       this.state.komariNode = k.node;
       this.state.komariOnline = k.online;
       this.saveCfg({ instanceStartAt: this.state.instanceStartAt, instanceEstStart: false });
-      this.log(`[Komari] 采用监控探针开机时间 ${k.bootAt.toISOString()}（节点 ${k.node}，已运行 ${komariRun}s）`, 'info');
+      const why = !localStart ? '本地无记录' : `与本地记录相差 ${diff}s`;
+      this.log(`[Komari] 采用监控探针开机时间 ${k.bootAt.toISOString()}（节点 ${k.node}，已运行 ${komariRun}s；${why}）`, 'info');
     }
     this.refreshInstanceRuntime();
     return k;
@@ -1054,6 +1059,13 @@ class AccountKeeper {
     if (!this.stopped) return this.status();
     this.stopped = false;
     this.runStartedAt = Date.now();   // 每次启动（含 restart）重置计时
+    // 配了 Komari 就立刻用探针校准一次：程序重启后本地记录的开机时间
+    // 往往是"启动时刻估算"，与真实开机时间有偏差，探针一上来就纠正。
+    if (String(this.cfg.komariUrl || '').trim()) {
+      this.syncBootFromKomari()
+        .then((k) => { if (k) this.log(`[Komari] 启动即校准：节点 ${k.node}，已运行 ${Math.round((Date.now() - k.bootAt.getTime()) / 1000)}s`, 'info'); })
+        .catch((e) => this.log(`[Komari] 启动校准失败：${e.message}`, 'warning'));
+    }
     this.supervise();
     const on = this.cfg.enabled && this.cfg.cookie;
     this.log(on ? `保活已启动（模式：${this.cfg.mode}）` : '保活已加载（未启用 / 未填 Cookie）', on ? 'success' : 'info');
