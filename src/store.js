@@ -51,6 +51,9 @@ const ACCOUNT_DEFAULTS = {
   // 运行时长上限 / 预警阈值（分钟）——公众版规则"断开1小时休眠"，默认按1小时上限
   instanceLimitMin: 60,      // 上限分钟数（默认60=1小时；0表示不限时，不预警）
   instanceWarnMin: 50,       // 预警分钟数（默认50，到点前10分钟提醒）
+  // Komari 监控：用云电脑内部探针的 uptime 推算真实开机时间（比面板自己观测更准）
+  komariUrl: '',             // 监控地址，如 http://107.174.234.89:25774；留空则不启用
+  komariNode: '',            // 指定节点名，留空则按账号名/账号自动匹配
   modeV2Migrated: false,     // 历史标记（上一版 ticket→claim 迁移遗留，已停用）
   modeV3Ticket: false,       // 模式回退标记：claim→ticket 修正只做一次
   checkin: { lastDate: '', streak: 0, lastAt: '' }

@@ -17,6 +17,7 @@ const WebSocket = require('ws');
 const CtYunEncryption = require('./crypto');
 const { loginByPassword, encryptPassword, decryptPassword } = require('./login');
 const { Notifier } = require('./notify');
+const { getBootInfo } = require('./komari');
 
 const BASE = 'https://agent.teleai.com.cn/teleagent-manager/v1';
 // 积分 / 福利社走的是 meter 服务，跟实例管理不是同一个前缀
@@ -263,18 +264,25 @@ class AccountKeeper {
     const ins = this.cfg.instanceId ? list.find((x) => x.id === this.cfg.instanceId) : list[0];
     if (!ins) throw new Error('配置的 instanceId 不存在，请检查或清空后自动选取');
     if (!this.cfg.instanceId) this.saveCfg({ instanceId: ins.id });
-    this.noteInstanceStatus(ins.status);
+    await this.noteInstanceStatus(ins.status);
     this.state.instanceStatus = ins.status;
     return ins;
   }
 
   // 观测实例状态跳变，记录本次开机时间（instance/list 不返回开机时间，只能靠跳变推断）
   // 开机时间持久化到 config.json：程序重启后读回接着算，不再从 0 开始。
-  noteInstanceStatus(status) {
+  // 若配置了 Komari 监控，则以探针 uptime 为准（更可靠）。
+  async noteInstanceStatus(status) {
     const prev = this._lastInsStatus;
     this._lastInsStatus = status;
     const wasRunning = prev !== null && RUNNING.includes(prev);
     const isRunning = RUNNING.includes(status);
+
+    // 运行中：优先用 Komari 探针校准（含重启后的真实开机时间）
+    if (isRunning && String(this.cfg.komariUrl || '').trim()) {
+      await this.syncBootFromKomari();
+      return;
+    }
 
     if (isRunning && !wasRunning) {
       // 非运行 → 运行：本次开机起点
@@ -304,14 +312,30 @@ class AccountKeeper {
         }
       }
     } else if (!isRunning) {
-      // 实例当前非运行（含首次观测就关机、或运行→关机）：清零并写盘，避免旧值残留到下次开机
+      // 实例当前非运行。
+      // 关键：不立即清零——平台会周期性关机（实测 5~10 分钟一次），
+      // 若一关机就清零，重新拉起后会把运行时长归零重算，丢失真实累计值。
+      // 改为：记录「首次」停机时刻（后续观测不刷新），保留原开机时间；
+      // 只有持续停机超过冷却期才真正清零。
       if (this.state.instanceStartAt) {
-        this.state.instanceStartAt = '';
-        this.state.instanceRuntimeSec = 0;
-        this.state.instanceEstStart = false;
-        this.saveCfg({ instanceStartAt: '', instanceEstStart: false });
-        this.log('[实例] 实例未运行，云电脑运行时间已清零', 'warning');
+        if (!this._downSince) {
+          this._downSince = Date.now();
+          this.log(`[实例] 实例停机，开始 30 分钟宽限计时（期间重新拉起则沿用原开机时间）`, 'warning');
+        }
+        const downFor = Date.now() - this._downSince;
+        const graceMs = 30 * 60 * 1000;   // 30 分钟冷却期
+        if (downFor > graceMs) {
+          this.state.instanceStartAt = '';
+          this.state.instanceRuntimeSec = 0;
+          this.state.instanceEstStart = false;
+          this.saveCfg({ instanceStartAt: '', instanceEstStart: false });
+          this.log('[实例] 持续停机超过 30 分钟，云电脑运行时间已清零', 'warning');
+          this._downSince = 0;
+        }
       }
+    } else {
+      // 恢复运行：退出宽限状态
+      this._downSince = 0;
     }
 
     // 无论跳变与否，实时刷新运行时长
@@ -327,6 +351,49 @@ class AccountKeeper {
 
   refreshInstanceRuntime() {
     this.state.instanceRuntimeSec = this.liveInstanceRuntime();
+  }
+
+  // 从 Komari 监控拉取云电脑真实开机时间。
+  // 返回 { bootAt, uptime, node, online } 或 null（未配置/失败）。
+  async fetchKomariBoot() {
+    const url = String(this.cfg.komariUrl || '').trim();
+    if (!url) return null;
+    try {
+      const r = await getBootInfo(url, this.cfg.komariNode || this.cfg.name, this.cfg);
+      if (!r.ok) return null;
+      return r;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // 用 Komari 校准开机时间。只在观测到实例处于运行状态时调用。
+  // 规则：
+  //   - Komari 说已开机时长 < 本地记录的运行时长 → 说明中途重启过，以 Komari 为准
+  //   - Komari 有值但本地无记录 → 直接用 Komari
+  //   - 二者接近（误差 < 60s）→ 不重复写盘
+  async syncBootFromKomari() {
+    const k = await this.fetchKomariBoot();
+    if (!k || !k.bootAt) return null;
+    const bootMs = k.bootAt.getTime();
+    if (Number.isNaN(bootMs)) return null;
+
+    const localStart = this.state.instanceStartAt ? new Date(this.state.instanceStartAt).getTime() : 0;
+    const localRun = this.liveInstanceRuntime();
+    const komariRun = Math.max(0, Math.floor((Date.now() - bootMs) / 1000));
+
+    // Komari 显示的开机更早（或本地没记录）→ 采用 Komari
+    const needUpdate = !localStart || komariRun < localRun - 30;
+    if (needUpdate) {
+      this.state.instanceStartAt = k.bootAt.toISOString();
+      this.state.instanceEstStart = false;   // 来自探针，不是估算
+      this.state.komariNode = k.node;
+      this.state.komariOnline = k.online;
+      this.saveCfg({ instanceStartAt: this.state.instanceStartAt, instanceEstStart: false });
+      this.log(`[Komari] 采用监控探针开机时间 ${k.bootAt.toISOString()}（节点 ${k.node}，已运行 ${komariRun}s）`, 'info');
+    }
+    this.refreshInstanceRuntime();
+    return k;
   }
 
   // 可配置的上限/预警（分钟→秒）。instanceLimitMin=0 表示不限时、不预警。
@@ -1055,6 +1122,10 @@ class AccountKeeper {
       instanceWarnMin: Number(this.cfg.instanceWarnMin) || 0,
       warmOk: this.state.warmOk,
       warmFailCount: this.state.warmFailCount,
+      komariNode: this.state.komariNode || '',
+      komariOnline: this.state.komariOnline == null ? null : this.state.komariOnline,
+      komariUrl: String(this.cfg.komariUrl || ''),
+      komariNodeCfg: String(this.cfg.komariNode || ''),
       mode: this.cfg.mode,
       authMode: this.cfg.authMode,
       account: this.cfg.account || '',

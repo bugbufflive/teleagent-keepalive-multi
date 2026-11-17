@@ -93,6 +93,8 @@
             <label>心跳间隔（秒）<input id="pingSec" type="number" min="3" title="claim 模式心跳包间隔，默认 5" /></label>
             <label>时长上限（分钟）<input id="instanceLimitMin" type="number" min="0" title="云电脑单次连续运行时长上限，默认 60；填 0 表示不限时不预警" /></label>
             <label>预警提前（分钟）<input id="instanceWarnMin" type="number" min="0" title="到达上限前多少分钟开始预警，默认 50" /></label>
+            <label>Komari 地址<input id="komariUrl" placeholder="http://ip:25774，留空不启用" title="填 Komari 监控地址后，用云电脑内部探针的开机时间计算运行时长（更准）" /></label>
+            <label>Komari 节点名<input id="komariNode" placeholder="留空按账号名自动匹配" title="对应 Komari 里的节点名，例如 7513" /></label>
             <label>实例 ID<input id="instanceId" placeholder="留空自动取第一个" /></label>
             <label>让位分钟<input id="pauseMin" type="number" min="1" /></label>
             <label>显示名<input id="name" placeholder="例如：会员号A / 公司号" /></label>
@@ -101,6 +103,7 @@
           <div class="row">
             <button class="btn primary" id="saveKeep">保存设置</button>
             <button class="btn" id="restart">重载循环</button>
+            <button class="btn" id="komariSync" title="用 Komari 探针的开机时间重新校准运行时长">校准开机时间</button>
             <button class="btn" id="desktop">打开云电脑</button>
             <button class="btn danger" id="delAccount">删除账号</button>
           </div>

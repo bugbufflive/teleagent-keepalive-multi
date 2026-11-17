@@ -71,7 +71,7 @@ const fmtInstRuntime = (a) => {
   } else {
     tip = '未设置时长上限';
   }
-  return `<span class="inst-run${warn}" title="${tip}">${prefix}${fmtUptime(sec)}</span>`;
+  return `<span class="inst-run${warn}" title="${tip}${a.komariNode ? `&#10;数据来源：Komari 节点 ${esc(a.komariNode)}` : ''}">${prefix}${fmtUptime(sec)}</span>`;
 };
 
 const sel = () => S.accounts.find((a) => a.id === S.selectedId) || null;
@@ -161,6 +161,7 @@ function renderDetail(force = false) {
     <span class="stat"><i>循环</i><b>${a.cycles || 0} 次</b></span>
     ${a.pointsError ? `<span class="stat err"><i>积分错误</i><b>${esc(a.pointsError).slice(0, 50)}</b></span>` : ''}
     ${a.warmFailCount > 0 ? `<span class="stat err"><i>预热失败</i><b>连续 ${a.warmFailCount} 次（连接凭证可能失效）</b></span>` : ''}
+    ${a.komariUrl ? `<span class="stat"><i>监控探针</i><b>${esc(a.komariNode || '自动匹配')} ${a.komariOnline ? '· 在线' : '· 离线'}</b></span>` : ''}
     ${a.lastError ? `<span class="stat err"><i>最近错误</i><b>${esc(a.lastError).slice(0, 60)}</b></span>` : ''}
   `;
 
@@ -187,6 +188,8 @@ function renderDetail(force = false) {
   put('pingSec', a.pingSec || 5);
   put('instanceLimitMin', a.instanceLimitMin == null ? 60 : a.instanceLimitMin);
   put('instanceWarnMin', a.instanceWarnMin == null ? 50 : a.instanceWarnMin);
+  put('komariUrl', a.komariUrl || '');
+  put('komariNode', a.komariNodeCfg || a.komariNode || '');
   put('instanceId', a.instanceId || '');
   put('pauseMin', a.pauseMin || 10);
   put('name', a.name || '');
@@ -402,6 +405,8 @@ $('saveKeep').addEventListener('click', async () => {
       pingSec: Number($('pingSec').value),
       instanceLimitMin: Number($('instanceLimitMin').value),
       instanceWarnMin: Number($('instanceWarnMin').value),
+      komariUrl: $('komariUrl').value.trim(),
+      komariNode: $('komariNode').value.trim(),
       instanceId: $('instanceId').value.trim(),
       pauseMin: Number($('pauseMin').value),
       autoRelogin: $('autoRelogin').checked,
@@ -478,6 +483,16 @@ $('reportPoints').addEventListener('click', async () => {
 $('restart').addEventListener('click', async () => {  const a = sel();  if (!a) return toast('先选一个账号', true);
   try { await post(`/api/accounts/${encodeURIComponent(a.id)}/restart`); toast('已重载该账号循环'); refreshState(); }
   catch (e) { toast(e.message, true); }
+});
+
+$('komariSync').addEventListener('click', async () => {  const a = sel();  if (!a) return toast('先选一个账号', true);
+  if (!a.komariUrl) return toast('该账号还没填 Komari 地址', true);
+  try {
+    const r = await post(`/api/accounts/${encodeURIComponent(a.id)}/komari-sync`);
+    const bj = new Date(new Date(r.data.bootAt).getTime() + 8 * 3600000).toISOString().slice(11, 19);
+    toast(`已校准：节点 ${r.data.node}，开机 ${bj}（${Math.floor(r.data.uptime / 60)} 分钟）`);
+    refreshState();
+  } catch (e) { toast(e.message, true); }
 });
 
 $('desktop').addEventListener('click', async () => {
@@ -767,7 +782,7 @@ $('tplHead').addEventListener('change', async () => {
 // 这里记录哪些字段被用户动过，保存成功后再清空。
 
 const DIRTY_FIELDS = [
-  'mode', 'refreshSec', 'sessionSec', 'gapSec', 'pingSec', 'instanceLimitMin', 'instanceWarnMin', 'instanceId', 'pauseMin', 'name', 'account', 'reloginDays',
+  'mode', 'refreshSec', 'sessionSec', 'gapSec', 'pingSec', 'instanceLimitMin', 'instanceWarnMin', 'komariUrl', 'komariNode', 'instanceId', 'pauseMin', 'name', 'account', 'reloginDays',
   'pointsAutoClaim', 'pointsDailyReport', 'pointsDailyReportAt',
   'autoRelogin', 'wecomWebhook', 'cookie'
 ];

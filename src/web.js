@@ -69,7 +69,7 @@ function basicAuth(req, password, user) {
   return safeEqual(u, user) && safeEqual(p, password);
 }
 
-const STR_KEYS = ['name', 'mode', 'authMode', 'account', 'cookie', 'instanceId', 'deviceCode', 'osType', 'clientVersion', 'wecomWebhook', 'remark', 'pointsDailyReportAt'];
+const STR_KEYS = ['name', 'mode', 'authMode', 'account', 'cookie', 'instanceId', 'deviceCode', 'osType', 'clientVersion', 'wecomWebhook', 'remark', 'pointsDailyReportAt', 'komariUrl', 'komariNode'];
 const NUM_KEYS = ['deviceType', 'refreshSec', 'sessionSec', 'gapSec', 'pingSec', 'pauseMin', 'cookieAlertDays', 'reloginDays', 'instanceLimitMin', 'instanceWarnMin'];
 const BOOL_KEYS = ['enabled', 'claim', 'autoRelogin', 'pointsAutoClaim', 'pointsDailyReport'];
 
@@ -192,6 +192,29 @@ function createServer({ manager, store, logger, dataDir }) {
 
         if (req.method === 'POST' && action === 'checkin') {
           return sendJson(res, { success: true, data: k.checkin(true) });
+        }
+
+        // 立即用 Komari 探针校准开机时间
+        if (req.method === 'POST' && action === 'komari-sync') {
+          if (!k) return sendJson(res, { error: '该账号的保活实例未运行，先启用一次' }, 400);
+          try {
+            const r = await k.syncBootFromKomari();
+            if (!r) {
+              return sendJson(res, { error: '未配置 Komari 地址，或探针无该节点数据' }, 400);
+            }
+            return sendJson(res, {
+              success: true,
+              data: {
+                node: r.node,
+                online: r.online,
+                bootAt: r.bootAt.toISOString(),
+                uptime: r.uptime,
+                status: k.status()
+              }
+            });
+          } catch (e) {
+            return sendJson(res, { error: e.message }, 500);
+          }
         }
 
         // 刷新剩余积分 + 每日领取状态
