@@ -110,6 +110,9 @@ class AccountKeeper {
       pointsClaimAt: '',         // 上次成功领取时间
       pointsReportAt: '',        // 上次定时播报时间
       pointsReportDate: '',      // 上次播报的北京时间日期（用来保证一天只推一次）
+      warmOk: null,              // 最近一次预热是否成功
+      warmFailAt: '',            // 最近一次预热失败时间
+      warmFailCount: 0,          // 预热连续失败次数（成功即归零）
       pointsError: ''
     };
     this.pointsClaimTryAt = 0;
@@ -655,66 +658,101 @@ class AccountKeeper {
   }
 
   async ensureRunning(ins) {
-    const st = ins && ins.status;
-    const id = (ins && ins.id) || this.cfg.instanceId;
-    const gap = this.state.lastTicketAt ? Math.round((Date.now() - new Date(this.state.lastTicketAt).getTime()) / 1000) : null;
-    this.state.desktopDown = true;
-    this.state.lastDownAt = new Date().toISOString();
-    this.log(`[实例] 当前状态 ${st}（${STATUS_TEXT[st] || '非运行'}），距上次换票 ${gap === null ? '未知' : gap + 's'}，调用 start 拉起…`, 'warning');
-    this.notifier.event('desktop', {
-      账号: this.cfg.name || this.cfg.account || '',
-      实例: id,
-      状态: STATUS_TEXT[st] || `状态 ${st}`,
-      距上次换票: gap === null ? '未知' : gap + ' 秒',
-      时间: new Date().toLocaleString('zh-CN')
-    }, Number(this.notifyCfg().cooldownMin) || 30);
-    let ok = false;
-    for (let i = 0; i < 3 && !ok; i++) {
-      try {
-        await this.startInstance();
-      } catch (e) {
-        this.log(`[实例] start 第 ${i + 1} 次失败：${e.message.slice(0, 120)}`, 'warning');
+    // 并发保护：同一账号的多个轮次可能同时检测到关机，只让一个执行拉起
+    if (this._starting) {
+      this.log('[实例] 已有拉起任务在进行，跳过重复调用', 'warning');
+      await this._starting;
+      return;
+    }
+    this._starting = (async () => {
+      const st = ins && ins.status;
+      const id = (ins && ins.id) || this.cfg.instanceId;
+      const gap = this.state.lastTicketAt ? Math.round((Date.now() - new Date(this.state.lastTicketAt).getTime()) / 1000) : null;
+      this.state.desktopDown = true;
+      this.state.lastDownAt = new Date().toISOString();
+      this.log(`[实例] 当前状态 ${st}（${STATUS_TEXT[st] || '非运行'}），距上次换票 ${gap === null ? '未知' : gap + 's'}，调用 start 拉起…`, 'warning');
+      this.notifier.event('desktop', {
+        账号: this.cfg.name || this.cfg.account || '',
+        实例: id,
+        状态: STATUS_TEXT[st] || `状态 ${st}`,
+        距上次换票: gap === null ? '未知' : gap + ' 秒',
+        时间: new Date().toLocaleString('zh-CN')
+      }, Number(this.notifyCfg().cooldownMin) || 30);
+      // 3 次尝试，但每次只等 40 秒（原来 90 秒），最坏 2 分钟而非 4.5 分钟
+      let ok = false;
+      for (let i = 0; i < 3 && !ok; i++) {
+        try {
+          await this.startInstance();
+        } catch (e) {
+          this.log(`[实例] start 第 ${i + 1} 次失败：${e.message.slice(0, 120)}`, 'warning');
+        }
+        ok = await this.waitReady(40000);
+        if (!ok && i < 2) await sleep(3000);
       }
-      ok = await this.waitReady(90000);
-      if (!ok) await sleep(5000);
+      if (!ok) {
+        this.notifier.event('desktop-fail', {
+          账号: this.cfg.name || this.cfg.account || '',
+          实例: id,
+          时间: new Date().toLocaleString('zh-CN')
+        }, 60);
+        this.state.desktopDown = false;
+        throw new Error('实例拉起超时（未回到 100/4）');
+      }
+      if (this.notifyCfg().notifyRecover !== false) {
+        await this.notifier.event('desktop-ok', {
+          账号: this.cfg.name || this.cfg.account || '',
+          实例: id,
+          时间: new Date().toLocaleString('zh-CN')
+        }, 1);
+      }
+      this.state.desktopDown = false;
+    })();
+    try {
+      await this._starting;
+    } finally {
+      this._starting = null;
     }
-    if (!ok) {
-      this.notifier.event('desktop-fail', {
-        账号: this.cfg.name || this.cfg.account || '',
-        实例: id,
-        时间: new Date().toLocaleString('zh-CN')
-      }, 60);
-      throw new Error('实例拉起超时（未回到 100/4）');
-    }
-    if (this.notifyCfg().notifyRecover !== false) {
-      await this.notifier.event('desktop-ok', {
-        账号: this.cfg.name || this.cfg.account || '',
-        实例: id,
-        时间: new Date().toLocaleString('zh-CN')
-      }, 1);
-    }
-    this.state.desktopDown = false;
   }
 
   // ---------- ticket 模式 ----------
 
   async ticketRound() {
     const ins = await this.resolveInstance();
-    if (!RUNNING.includes(ins.status)) await this.ensureRunning(ins);
+    const realStatus = Number(ins.status);
+    if (!RUNNING.includes(realStatus)) await this.ensureRunning(ins);
 
     const url = await this.connectTicketWithRetry();
+    let warmOk = false;
     try {
       await this.connectDataByToken(url);
+      warmOk = true;
       this.state.warmAt = new Date().toISOString();
+      this.state.warmFailCount = 0;
     } catch (e) {
+      this.state.warmFailAt = new Date().toISOString();
+      this.state.warmFailCount++;
       this.log(`[预热] 换连接参数失败（不影响保活）：${e.message.slice(0, 120)}`, 'warning');
+      // 连续失败说明连接凭证失效，需要人工介入；告警但不停摆
+      if (this.state.warmFailCount > 0 && this.state.warmFailCount % 20 === 1) {
+        this.log(`[预热] 已连续 ${this.state.warmFailCount} 次失败，连接凭证可能失效，建议重新登录账号`, 'error');
+      }
     }
 
+    // 真实状态：换票后再查一次，不用 100 假在线掩盖已关机的事实
+    const after = await this.resolveInstance().catch(() => null);
+    const nowStatus = after ? Number(after.status) : realStatus;
+    const running = RUNNING.includes(nowStatus);
+
     this.state.lastTicketAt = new Date().toISOString();
-    this.state.instanceStatus = 100;
-    this.state.phase = 'online';
+    this.state.instanceStatus = nowStatus;
+    this.state.phase = running ? 'online' : 'down';
+    this.state.warmOk = warmOk;
     this.state.cycles++;
-    this.log(`[换票] 已刷新实例活跃并预热连接（第 ${this.state.cycles} 次），不占客户端位`, 'success');
+    if (running) {
+      this.log(`[换票] 已刷新实例活跃并预热连接（第 ${this.state.cycles} 次），不占客户端位`, 'success');
+    } else {
+      this.log(`[换票] 已刷新活跃，但实例状态 ${nowStatus}（${STATUS_TEXT[nowStatus] || '非运行'}），等待下一轮拉起`, 'warning');
+    }
     return url;
   }
 
@@ -1015,6 +1053,8 @@ class AccountKeeper {
       instanceWarn: this.isInstanceWarn(),
       instanceLimitMin: Number(this.cfg.instanceLimitMin) || 0,
       instanceWarnMin: Number(this.cfg.instanceWarnMin) || 0,
+      warmOk: this.state.warmOk,
+      warmFailCount: this.state.warmFailCount,
       mode: this.cfg.mode,
       authMode: this.cfg.authMode,
       account: this.cfg.account || '',

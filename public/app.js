@@ -160,6 +160,7 @@ function renderDetail(force = false) {
     <span class="stat"><i>云电脑运行</i><b>${fmtInstRuntime(a)}</b></span>
     <span class="stat"><i>循环</i><b>${a.cycles || 0} 次</b></span>
     ${a.pointsError ? `<span class="stat err"><i>积分错误</i><b>${esc(a.pointsError).slice(0, 50)}</b></span>` : ''}
+    ${a.warmFailCount > 0 ? `<span class="stat err"><i>预热失败</i><b>连续 ${a.warmFailCount} 次（连接凭证可能失效）</b></span>` : ''}
     ${a.lastError ? `<span class="stat err"><i>最近错误</i><b>${esc(a.lastError).slice(0, 60)}</b></span>` : ''}
   `;
 
